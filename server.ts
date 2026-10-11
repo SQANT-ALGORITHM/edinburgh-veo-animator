@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import http from 'http';
 import { GoogleGenAI, GenerateVideosOperation } from '@google/genai';
 import path from 'path';
 import fs from 'fs';
@@ -211,14 +212,15 @@ app.get('/api/preset/edinburgh', (_req: Request, res: Response) => {
 // Initialize dev or prod Vite server
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
+  const server = http.createServer(app);
 
   if (!isProduction) {
     const { createServer } = await import('vite');
+    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createServer({
       server: {
         middlewareMode: true,
-        host: '0.0.0.0',
-        port: PORT,
+        hmr: isHmrDisabled ? false : { server },
       },
       appType: 'spa',
     });
@@ -231,7 +233,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`🎬 Edinburgh Veo Animator Server running at http://0.0.0.0:${PORT}`);
   });
 }
