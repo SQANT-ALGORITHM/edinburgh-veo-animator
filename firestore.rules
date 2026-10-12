@@ -1,0 +1,125 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Catch-all Deny Rule
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Validation helper for LivingVideo
+    function isValidLivingVideo(data) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'prompt', 'aspectRatio', 'model', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'title', 'prompt', 'aspectRatio', 'model', 'videoUrl', 'thumbnailUrl', 'durationSeconds', 'viewsCount', 'isPublic', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.title is string && data.title.size() <= 120
+        && data.prompt is string && data.prompt.size() <= 2000
+        && data.aspectRatio in ['9:16', '16:9']
+        && data.model is string && data.model.size() <= 64
+        && (!('videoUrl' in data) || (data.videoUrl is string && data.videoUrl.size() <= 1000))
+        && (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 200000))
+        && (!('durationSeconds' in data) || (data.durationSeconds is number && data.durationSeconds >= 0 && data.durationSeconds <= 120))
+        && (!('viewsCount' in data) || (data.viewsCount is number && data.viewsCount >= 0))
+        && (!('isPublic' in data) || (data.isPublic is bool));
+    }
+
+    // Validation helper for UserSettings
+    function isValidUserSettings(data) {
+      return data.keys().hasAll(['userId', 'audioVolume', 'playbackSpeed', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'audioVolume', 'playbackSpeed', 'enableTraffic', 'enablePedestrians', 'enableClouds', 'enableReflections', 'enablePushIn', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.audioVolume is number && data.audioVolume >= 0.0 && data.audioVolume <= 1.0
+        && data.playbackSpeed is number && data.playbackSpeed >= 0.25 && data.playbackSpeed <= 4.0
+        && (!('enableTraffic' in data) || (data.enableTraffic is bool))
+        && (!('enablePedestrians' in data) || (data.enablePedestrians is bool))
+        && (!('enableClouds' in data) || (data.enableClouds is bool))
+        && (!('enableReflections' in data) || (data.enableReflections is bool))
+        && (!('enablePushIn' in data) || (data.enablePushIn is bool));
+    }
+
+    // Videos collection
+    match /videos/{videoId} {
+      allow get: if resource.data.isPublic == true || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow list: if resource.data.isPublic == true || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && isValidId(videoId)
+        && incoming().userId == request.auth.uid
+        && incoming().id == videoId
+        && isValidLivingVideo(incoming());
+
+      allow update: if isSignedIn()
+        && isValidId(videoId)
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && isValidLivingVideo(incoming())
+        && (
+          // Standard metadata update
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'isPublic', 'updatedAt']) ||
+          // View increment
+          (incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount', 'updatedAt']) && incoming().viewsCount == existing().viewsCount + 1)
+        );
+
+      allow delete: if isSignedIn()
+        && isValidId(videoId)
+        && existing().userId == request.auth.uid;
+    }
+
+    // Boot Connection test document
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // Curated Landmark Presets (Read-only for public)
+    match /presets/{presetId} {
+      allow get, list: if true;
+      allow write: if false;
+    }
+
+    // User settings subcollection
+    match /users/{userId}/settings/{settingId} {
+      allow get, list: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && isValidId(settingId)
+        && incoming().userId == userId
+        && isValidUserSettings(incoming());
+
+      allow update: if isOwner(userId)
+        && isValidId(settingId)
+        && existing().userId == userId
+        && incoming().userId == existing().userId
+        && isValidUserSettings(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'audioVolume', 'playbackSpeed', 'enableTraffic', 'enablePedestrians',
+          'enableClouds', 'enableReflections', 'enablePushIn', 'updatedAt'
+        ]);
+
+      allow delete: if isOwner(userId);
+    }
+  }
+}

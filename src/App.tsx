@@ -1,10 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import { User, onAuthStateChanged } from 'firebase/auth';
 import { Navbar } from './components/Navbar';
 import { LivingCanvas } from './components/LivingCanvas';
 import { VeoStudio } from './components/VeoStudio';
 import { PromptGuide } from './components/PromptGuide';
 import { HistoryGallery } from './components/HistoryGallery';
 import { VideoHistoryItem } from './types';
+import {
+  auth,
+  loginWithGoogle,
+  logoutUser,
+  saveVideoToFirestore,
+  subscribeToCommunityVideos,
+} from './firebase';
 import {
   Sparkles,
   Camera,
@@ -16,6 +24,8 @@ import {
   Clock,
   Eye,
   Sliders,
+  Database,
+  CloudCheck,
 } from 'lucide-react';
 
 export default function App() {
@@ -23,9 +33,33 @@ export default function App() {
   const [currentImageSrc, setCurrentImageSrc] = useState<string>('/edinburgh-golden-rush.jpg');
   const [isCustomImage, setIsCustomImage] = useState<boolean>(false);
   const [history, setHistory] = useState<VideoHistoryItem[]>([]);
+  const [user, setUser] = useState<User | null>(null);
 
-  // Load history from localStorage if available
+  // Listen to Firebase Auth state
   useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Sync videos with Firestore in real-time
+  useEffect(() => {
+    const unsubscribe = subscribeToCommunityVideos((firestoreVideos) => {
+      if (firestoreVideos && firestoreVideos.length > 0) {
+        setHistory((prev) => {
+          const map = new Map<string, VideoHistoryItem>();
+          // Combine firestore videos with local videos
+          firestoreVideos.forEach((v) => map.set(v.id, v));
+          prev.forEach((v) => {
+            if (!map.has(v.id)) map.set(v.id, v);
+          });
+          return Array.from(map.values());
+        });
+      }
+    });
+
+    // Fallback to local storage
     try {
       const saved = localStorage.getItem('edinburgh_veo_history');
       if (saved) {
@@ -34,15 +68,46 @@ export default function App() {
     } catch {
       // ignore
     }
+
+    return () => unsubscribe();
   }, []);
 
-  const handleVideoGenerated = (item: VideoHistoryItem) => {
+  const handleVideoGenerated = async (item: VideoHistoryItem) => {
     const updated = [item, ...history];
     setHistory(updated);
     try {
       localStorage.setItem('edinburgh_veo_history', JSON.stringify(updated));
     } catch {
       // ignore
+    }
+
+    // Persist to Firestore if signed in
+    if (user) {
+      try {
+        await saveVideoToFirestore(item, user);
+      } catch (err) {
+        console.warn('Could not save video to Firestore:', err);
+      }
+    }
+  };
+
+  const handleLogin = async () => {
+    try {
+      const loggedUser = await loginWithGoogle();
+      if (loggedUser) {
+        setUser(loggedUser);
+      }
+    } catch {
+      // Handled gracefully in loginWithGoogle
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+      setUser(null);
+    } catch {
+      // Handled gracefully in logoutUser
     }
   };
 
@@ -54,7 +119,13 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#090b10] text-[#e2e8f0] flex flex-col font-sans selection:bg-amber-500/30 selection:text-amber-200">
       {/* Top Navbar */}
-      <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Navbar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        user={user}
+        onLogin={handleLogin}
+        onLogout={handleLogout}
+      />
 
       {/* Hero Atmosphere Banner */}
       <section className="relative overflow-hidden border-b border-amber-500/10 bg-gradient-to-b from-neutral-950 via-[#0c0e17] to-[#090b10] py-8 sm:py-10">

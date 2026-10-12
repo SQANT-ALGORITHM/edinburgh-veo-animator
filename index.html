@@ -10,19 +10,34 @@
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <script>
-      // Per environment constraints: HMR is disabled in preview, ignore WebSocket errors
+      // Per environment constraints: HMR is disabled in preview, ignore WebSocket errors and benign auth popup cancellations
       window.addEventListener('unhandledrejection', function(e) {
         var reason = e && e.reason;
         var msg = (reason && (reason.message || String(reason))) || '';
         var stack = (reason && reason.stack) || '';
-        if (msg.indexOf('WebSocket') !== -1 || stack.indexOf('@vite/client') !== -1) {
+        if (
+          msg.indexOf('WebSocket') !== -1 ||
+          stack.indexOf('@vite/client') !== -1 ||
+          msg.indexOf('Pending promise was never set') !== -1 ||
+          msg.indexOf('popup-closed-by-user') !== -1 ||
+          msg.indexOf('cancelled-popup-request') !== -1 ||
+          msg.indexOf('popup-blocked') !== -1 ||
+          stack.indexOf('@firebase/auth') !== -1
+        ) {
           e.preventDefault();
         }
       });
       window.addEventListener('error', function(e) {
         var msg = (e && e.message) || '';
         var filename = (e && e.filename) || '';
-        if (msg.indexOf('WebSocket') !== -1 || filename.indexOf('@vite/client') !== -1) {
+        if (
+          msg.indexOf('WebSocket') !== -1 ||
+          filename.indexOf('@vite/client') !== -1 ||
+          msg.indexOf('Pending promise was never set') !== -1 ||
+          msg.indexOf('popup-closed-by-user') !== -1 ||
+          msg.indexOf('cancelled-popup-request') !== -1 ||
+          filename.indexOf('firebase_auth') !== -1
+        ) {
           e.preventDefault();
         }
       });

@@ -1,19 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Film, Compass, Clock, SlidersHorizontal, MapPin } from 'lucide-react';
+import { Sparkles, Film, Compass, Clock, MapPin, LogIn, LogOut, User as UserIcon, Database } from 'lucide-react';
+import { User } from 'firebase/auth';
 
 interface NavbarProps {
   activeTab: 'motion' | 'veo' | 'guide';
   setActiveTab: (tab: 'motion' | 'veo' | 'guide') => void;
+  user: User | null;
+  onLogin: () => void;
+  onLogout: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  activeTab,
+  setActiveTab,
+  user,
+  onLogin,
+  onLogout,
+}) => {
   const [edinburghTime, setEdinburghTime] = useState<string>('17:42:15');
 
   // Realistic Edinburgh Golden Hour Clock (Dusk rush hour: 17:42 - 17:57)
   useEffect(() => {
     const timer = setInterval(() => {
       const now = new Date();
-      // Format as 17:42:xx
       const secs = String(now.getSeconds()).padStart(2, '0');
       const mins = String((now.getMinutes() % 15) + 42).padStart(2, '0');
       setEdinburghTime(`17:${mins}:${secs} GMT`);
@@ -88,12 +97,55 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
           </button>
         </nav>
 
-        {/* Live Edinburgh Golden Hour Clock */}
-        <div className="hidden lg:flex items-center gap-3">
-          <div className="px-3 py-1.5 rounded-xl bg-neutral-900 border border-amber-500/20 flex items-center gap-2 text-xs font-mono text-amber-300">
+        {/* Firebase Auth & Cloud Sync */}
+        <div className="flex items-center gap-3">
+          {/* Live Edinburgh Golden Hour Clock */}
+          <div className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-neutral-900 border border-amber-500/20 text-xs font-mono text-amber-300">
             <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
             <span>Rush Hour: {edinburghTime}</span>
           </div>
+
+          {/* Firestore Status Badge */}
+          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-[11px] font-mono text-emerald-400">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <Database className="w-3 h-3 text-emerald-400" />
+            <span>Firestore</span>
+          </div>
+
+          {user ? (
+            <div className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-xl px-2.5 py-1">
+              {user.photoURL ? (
+                <img
+                  src={user.photoURL}
+                  alt={user.displayName || 'User'}
+                  className="w-6 h-6 rounded-full border border-amber-500/40 object-cover"
+                />
+              ) : (
+                <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-300 flex items-center justify-center text-[10px] font-bold">
+                  {user.email ? user.email[0].toUpperCase() : 'U'}
+                </div>
+              )}
+              <span className="text-xs text-neutral-300 font-medium hidden sm:inline max-w-[100px] truncate">
+                {user.displayName || user.email?.split('@')[0]}
+              </span>
+              <button
+                onClick={onLogout}
+                title="Sign out of Firebase"
+                className="p-1 text-neutral-400 hover:text-red-400 transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onLogin}
+              className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sign in with Google</span>
+              <span className="sm:hidden">Sign In</span>
+            </button>
+          )}
         </div>
       </div>
     </header>

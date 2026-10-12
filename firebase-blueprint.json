@@ -1,0 +1,172 @@
+{
+  "entities": {
+    "LivingVideo": {
+      "title": "Living Video",
+      "description": "A living cinematic city video generated with Veo 3.1 or saved from simulation",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique video document identifier",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "description": "Author user UID",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the living animation",
+          "maxLength": 120
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Cinematic prompt used for the living video",
+          "maxLength": 2000
+        },
+        "aspectRatio": {
+          "type": "string",
+          "description": "Video aspect ratio",
+          "enum": ["9:16", "16:9"]
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier used",
+          "maxLength": 64
+        },
+        "videoUrl": {
+          "type": "string",
+          "description": "URL or stream endpoint to the living video",
+          "maxLength": 1000
+        },
+        "thumbnailUrl": {
+          "type": "string",
+          "description": "Thumbnail preview image URL or data URI",
+          "maxLength": 200000
+        },
+        "durationSeconds": {
+          "type": "number",
+          "description": "Video duration in seconds"
+        },
+        "viewsCount": {
+          "type": "number",
+          "description": "Number of times viewed"
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Whether the animation is featured in public community reel"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["id", "userId", "title", "prompt", "aspectRatio", "model", "createdAt", "updatedAt"]
+    },
+    "MotionPreset": {
+      "title": "Motion Preset",
+      "description": "A curated motion simulation preset configuration",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Preset identifier",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Preset display name",
+          "maxLength": 80
+        },
+        "location": {
+          "type": "string",
+          "description": "City landmark name",
+          "maxLength": 80
+        },
+        "imageSrc": {
+          "type": "string",
+          "description": "Image source path",
+          "maxLength": 1000
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Recommended prompt",
+          "maxLength": 2000
+        },
+        "aspectRatio": {
+          "type": "string",
+          "enum": ["9:16", "16:9"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "name", "location", "imageSrc", "prompt", "aspectRatio"]
+    },
+    "UserSettings": {
+      "title": "User Settings",
+      "description": "User preferences for playback, layers, and audio atmosphere",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "audioVolume": {
+          "type": "number",
+          "description": "Atmosphere audio volume level between 0 and 1"
+        },
+        "playbackSpeed": {
+          "type": "number",
+          "description": "Default simulation speed"
+        },
+        "enableTraffic": {
+          "type": "boolean"
+        },
+        "enablePedestrians": {
+          "type": "boolean"
+        },
+        "enableClouds": {
+          "type": "boolean"
+        },
+        "enableReflections": {
+          "type": "boolean"
+        },
+        "enablePushIn": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "audioVolume", "playbackSpeed", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/videos/{videoId}": {
+      "schema": "LivingVideo",
+      "description": "Collection of generated and saved living videos"
+    },
+    "/presets/{presetId}": {
+      "schema": "MotionPreset",
+      "description": "Curated landmark presets and camera viewpoints"
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": "UserSettings",
+      "description": "User specific playback preferences and audio configs"
+    }
+  }
+}
