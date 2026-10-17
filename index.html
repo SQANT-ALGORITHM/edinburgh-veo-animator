@@ -11,36 +11,59 @@
     <meta name="twitter:card" content="summary_large_image" />
     <script>
       // Per environment constraints: HMR is disabled in preview, ignore WebSocket errors and benign auth popup cancellations
+      function isBenignHmrOrAuthError(err, filename) {
+        var msg = '';
+        var stack = '';
+        if (typeof err === 'string') {
+          msg = err;
+        } else if (err && typeof err === 'object') {
+          msg = (err.message || '') + ' ' + (err.name || '') + ' ' + String(err);
+          stack = err.stack || '';
+        }
+        filename = String(filename || '');
+        var combined = (msg + ' ' + stack + ' ' + filename).toLowerCase();
+        return (
+          combined.indexOf('websocket') !== -1 ||
+          combined.indexOf('@vite/client') !== -1 ||
+          combined.indexOf('pending promise was never set') !== -1 ||
+          combined.indexOf('popup-closed-by-user') !== -1 ||
+          combined.indexOf('cancelled-popup-request') !== -1 ||
+          combined.indexOf('popup-blocked') !== -1 ||
+          combined.indexOf('firebase_auth') !== -1 ||
+          combined.indexOf('@firebase/auth') !== -1
+        );
+      }
       window.addEventListener('unhandledrejection', function(e) {
-        var reason = e && e.reason;
-        var msg = (reason && (reason.message || String(reason))) || '';
-        var stack = (reason && reason.stack) || '';
-        if (
-          msg.indexOf('WebSocket') !== -1 ||
-          stack.indexOf('@vite/client') !== -1 ||
-          msg.indexOf('Pending promise was never set') !== -1 ||
-          msg.indexOf('popup-closed-by-user') !== -1 ||
-          msg.indexOf('cancelled-popup-request') !== -1 ||
-          msg.indexOf('popup-blocked') !== -1 ||
-          stack.indexOf('@firebase/auth') !== -1
-        ) {
+        var reason = e && (e.reason || e);
+        if (isBenignHmrOrAuthError(reason, '')) {
           e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
+          if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          return true;
         }
-      });
+      }, true);
       window.addEventListener('error', function(e) {
-        var msg = (e && e.message) || '';
+        var err = (e && (e.error || e.message)) || e;
         var filename = (e && e.filename) || '';
-        if (
-          msg.indexOf('WebSocket') !== -1 ||
-          filename.indexOf('@vite/client') !== -1 ||
-          msg.indexOf('Pending promise was never set') !== -1 ||
-          msg.indexOf('popup-closed-by-user') !== -1 ||
-          msg.indexOf('cancelled-popup-request') !== -1 ||
-          filename.indexOf('firebase_auth') !== -1
-        ) {
+        if (isBenignHmrOrAuthError(err, filename)) {
           e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
+          if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          return true;
         }
-      });
+      }, true);
+      window.onunhandledrejection = function(e) {
+        var reason = e && (e.reason || e);
+        if (isBenignHmrOrAuthError(reason, '')) {
+          if (e && e.preventDefault) e.preventDefault();
+          return true;
+        }
+      };
+      window.onerror = function(msg, url, line, col, err) {
+        if (isBenignHmrOrAuthError(err || msg, url)) {
+          return true;
+        }
+      };
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

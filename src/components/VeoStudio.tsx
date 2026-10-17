@@ -16,36 +16,17 @@ import {
   Camera,
   Layers,
   Info,
+  Compass,
+  Check,
 } from 'lucide-react';
-import { AspectRatio, VideoResolution, VeoModel, VideoHistoryItem } from '../types';
+import { AspectRatio, VideoResolution, VeoModel, VideoHistoryItem, CityPreset } from '../types';
+import { CITY_PRESETS } from '../data/presets';
 
 interface VeoStudioProps {
   currentImageSrc: string;
   onSelectImage: (src: string, isCustom?: boolean) => void;
   onVideoGenerated: (item: VideoHistoryItem) => void;
 }
-
-const DEFAULT_EDINBURGH_PROMPT = `Animate this exact Edinburgh Golden Rush Hour image into a cinematic 15-second vertical video.
-
-CORE PRINCIPLE: THE WORLD ITSELF IS MOVING.
-
-Preserve the original clock tower, illuminated clock face, Gothic spires, historic buildings, street layout, sunset, colours and composition. Keep all architecture structurally stable.
-
-PRIMARY MOTION: Traffic moves naturally along the existing street. Buses and cars advance smoothly within their lanes, maintaining realistic spacing and direction.
-
-SECONDARY MOTION: Pedestrians walk independently along both pavements. Headlights, tail lights and street reflections shift subtly as vehicles move. Clouds drift slowly across the sunset.
-
-MICRO-MOTION: Distant traffic continues moving, small figures remain active in the background, and illuminated windows and streetlights retain their natural glow.
-
-CAMERA: Maintain an almost-locked elevated viewpoint with only an extremely subtle cinematic push-in. The camera must not dominate the motion.
-
-MOTION QUALITY: Natural speed, consistent object identity, realistic vehicle physics, stable architecture and coherent perspective. Animate selectively rather than moving everything.
-
-ENDING: Finish with the same city continuing to live, without an abrupt camera jump or sudden scene transformation.
-
-No new buildings, no duplicated vehicles, no melting architecture, no exaggerated speed, no scene cuts, no text overlays and no artificial transitions.
-
-The result should feel like a real, living Edinburgh city observed at golden hour.`;
 
 export const VeoStudio: React.FC<VeoStudioProps> = ({
   currentImageSrc,
@@ -55,7 +36,8 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
   const [model, setModel] = useState<VeoModel>('veo-3.1-fast-generate-preview');
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16');
   const [resolution, setResolution] = useState<VideoResolution>('720p');
-  const [prompt, setPrompt] = useState<string>(DEFAULT_EDINBURGH_PROMPT);
+  const [prompt, setPrompt] = useState<string>(CITY_PRESETS[0].prompt);
+  const [activePresetId, setActivePresetId] = useState<string>(CITY_PRESETS[0].id);
 
   // Status & Progress
   const [isGenerating, setIsGenerating] = useState(false);
@@ -64,17 +46,19 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [operationName, setOperationName] = useState<string | null>(null);
   const [generatedVideoUrl, setGeneratedVideoUrl] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
-  // Polling interval reference
-  const pollTimerRef = useRef<any>(null);
+  // Polling reference
+  const pollTimeoutRef = useRef<any>(null);
   const stageTimerRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoPlayerRef = useRef<HTMLVideoElement | null>(null);
+  const pollStartRef = useRef<number>(0);
 
   const clearTimers = () => {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
     }
     if (stageTimerRef.current) {
       clearInterval(stageTimerRef.current);
@@ -82,14 +66,18 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
     }
   };
 
-  // Clean up timer on unmount
   useEffect(() => {
     return () => {
       clearTimers();
     };
   }, []);
 
-  // Handle file upload
+  const handleSelectPreset = (preset: CityPreset) => {
+    setActivePresetId(preset.id);
+    onSelectImage(preset.imageSrc, false);
+    setPrompt(preset.prompt);
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -97,19 +85,18 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
+      setActivePresetId('custom');
       onSelectImage(result, true);
     };
     reader.readAsDataURL(file);
   };
 
-  // Convert current image to base64
   const getImageBase64 = async (): Promise<{ base64: string; mimeType: string }> => {
     if (currentImageSrc.startsWith('data:')) {
       const mime = currentImageSrc.split(';')[0].replace('data:', '');
       return { base64: currentImageSrc, mimeType: mime };
     }
 
-    // Fetch image from local path
     const res = await fetch(currentImageSrc);
     const blob = await res.blob();
     return new Promise((resolve, reject) => {
@@ -125,17 +112,14 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
     });
   };
 
-  // Generation stages labels
   const stageLabels = [
-    'Initializing Veo 3.1 generation request...',
-    'Analyzing spatial depth & perspective vanishing points...',
-    'Locking architectural stability anchor (Clock Tower & Spires)...',
-    'Synthesizing Princes Street vehicle lanes & pedestrian physics...',
-    'Simulating dusk lighting, wet road reflections & cloud drift...',
-    'Rendering living video sequence with Google Veo 3.1...',
+    'Initializing Veo 3.1 generation pipeline...',
+    'Locking architectural rigidity & perspective vanishing point...',
+    'Synthesizing vehicle lane momentum & pedestrian physics...',
+    'Simulating dusk lighting, wet asphalt reflections & cloud drift...',
+    'Rendering living video master with Google Veo 3.1...',
   ];
 
-  // Start Generation
   const handleStartGeneration = async () => {
     try {
       setIsGenerating(true);
@@ -143,15 +127,15 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
       setGeneratedVideoUrl(null);
       setGenerationStage(0);
       setStatusMessage(stageLabels[0]);
+      pollStartRef.current = Date.now();
 
-      // Progress animation
       let currentStage = 0;
       clearTimers();
       stageTimerRef.current = setInterval(() => {
         currentStage = (currentStage + 1) % stageLabels.length;
         setGenerationStage(currentStage);
         setStatusMessage(stageLabels[currentStage]);
-      }, 14000);
+      }, 12000);
 
       const { base64, mimeType } = await getImageBase64();
 
@@ -176,10 +160,17 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
       }
 
       setOperationName(data.operationName);
-      setStatusMessage('Veo operation created. Polling video progress...');
+      setStatusMessage('Veo operation active. Synthesizing living city motion...');
 
-      // Start polling backend for operation completion
-      pollTimerRef.current = setInterval(async () => {
+      // Self-scheduling polling loop with 6-minute timeout safeguard
+      const pollProgress = async () => {
+        if (Date.now() - pollStartRef.current > 360000) {
+          clearTimers();
+          setIsGenerating(false);
+          setErrorMessage('Video generation timed out after 6 minutes. Please try again.');
+          return;
+        }
+
         try {
           const pollRes = await fetch('/api/video-status', {
             method: 'POST',
@@ -192,19 +183,18 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
           if (pollData.error) {
             clearTimers();
             setIsGenerating(false);
-            setErrorMessage(pollData.error.message || 'Error occurred during generation.');
+            setErrorMessage(pollData.error.message || 'Error occurred during Veo generation.');
             return;
           }
 
           if (pollData.done && pollData.hasVideo) {
             clearTimers();
             setIsGenerating(false);
-            setStatusMessage('Video generation completed successfully!');
+            setStatusMessage('Living video generation completed successfully!');
 
             const streamUrl = `/api/video-stream?operationName=${encodeURIComponent(data.operationName)}`;
             setGeneratedVideoUrl(streamUrl);
 
-            // Add to history
             const newItem: VideoHistoryItem = {
               id: Date.now().toString(),
               operationName: data.operationName,
@@ -214,14 +204,21 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
               aspectRatio,
               model,
               createdAt: Date.now(),
-              durationSeconds: 15,
+              durationSeconds: pollData.durationSeconds || 6,
             };
             onVideoGenerated(newItem);
+            return;
           }
+
+          // Schedule next poll in 8 seconds
+          pollTimeoutRef.current = setTimeout(pollProgress, 8000);
         } catch (err: any) {
           console.error('Polling error:', err);
+          pollTimeoutRef.current = setTimeout(pollProgress, 8000);
         }
-      }, 8000);
+      };
+
+      pollTimeoutRef.current = setTimeout(pollProgress, 8000);
     } catch (err: any) {
       clearTimers();
       setIsGenerating(false);
@@ -229,7 +226,33 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
     }
   };
 
-  // Add prompt tag helper
+  const handleDownloadMp4 = async () => {
+    if (!generatedVideoUrl) return;
+    try {
+      setIsDownloading(true);
+      const url = generatedVideoUrl.includes('?')
+        ? `${generatedVideoUrl}&download=1`
+        : `${generatedVideoUrl}?download=1`;
+
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = objectUrl;
+      a.download = 'edinburgh_living_city.mp4';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(objectUrl);
+      document.body.removeChild(a);
+    } catch {
+      window.location.href = `${generatedVideoUrl}&download=1`;
+    } finally {
+      setTimeout(() => setIsDownloading(false), 1200);
+    }
+  };
+
   const addPromptTag = (tag: string) => {
     if (!prompt.includes(tag)) {
       setPrompt((prev) => `${prev.trim()}\n\n${tag}`);
@@ -242,54 +265,76 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
       <div className="p-6 rounded-2xl bg-neutral-900/60 border border-amber-500/20 backdrop-blur-xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-80 h-80 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-xs font-semibold text-amber-300 mb-2">
-              <Film className="w-3.5 h-3.5" />
-              Google Veo 3.1 Video Generation Engine
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-xs font-semibold text-amber-300 mb-2">
+                <Film className="w-3.5 h-3.5" />
+                Google Veo 3.1 Video Generation Studio
+              </div>
+              <h2 className="text-2xl font-bold font-cinzel text-neutral-100">
+                Animate Photo Into Living Cinematic Video
+              </h2>
+              <p className="text-sm text-neutral-400 mt-1 max-w-2xl">
+                Transform Edinburgh landmark scenes or your own uploaded photography into a high-fidelity living cinematic video with authentic traffic physics and anchored historic architecture.
+              </p>
             </div>
-            <h2 className="text-2xl font-bold font-cinzel text-neutral-100">
-              Animate Photo Into Living Cinematic Video
-            </h2>
-            <p className="text-sm text-neutral-400 mt-1 max-w-2xl">
-              Turn the still Edinburgh Golden Rush Hour masterwork or your own uploaded photo into a continuous, 15-second breathing world with realistic traffic physics and stable historic architecture.
-            </p>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="px-3.5 py-2 rounded-xl bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-medium hover:bg-neutral-700 transition-all flex items-center gap-1.5"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                Upload Any Photo
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleFileUpload}
+              />
+            </div>
           </div>
 
-          {/* Preset Buttons */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                onSelectImage('/edinburgh-golden-rush.jpg', false);
-                setPrompt(DEFAULT_EDINBURGH_PROMPT);
-                setAspectRatio('9:16');
-              }}
-              className="px-3.5 py-2 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-medium hover:bg-amber-500/30 transition-all flex items-center gap-1.5 shadow-lg"
-            >
-              <Camera className="w-3.5 h-3.5" />
-              Edinburgh Golden Rush (Preset)
-            </button>
-
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="px-3.5 py-2 rounded-xl bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-medium hover:bg-neutral-700 transition-all flex items-center gap-1.5"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              Upload Any Photo
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleFileUpload}
-            />
+          {/* Curated Landmark Worlds Selector */}
+          <div className="flex flex-col gap-2 pt-2">
+            <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+              <Compass className="w-3.5 h-3.5 text-amber-400" />
+              <span>Select Curated Landmark Scene:</span>
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {CITY_PRESETS.map((preset) => {
+                const isSelected = activePresetId === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    onClick={() => handleSelectPreset(preset)}
+                    className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                      isSelected
+                        ? 'bg-amber-500/20 border-amber-500/60 shadow-lg text-amber-200 ring-1 ring-amber-500/40'
+                        : 'bg-neutral-950/80 border-neutral-800 text-neutral-400 hover:border-amber-500/30 hover:text-neutral-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-mono tracking-wider text-amber-400/90 font-bold">
+                        {preset.badge}
+                      </span>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-amber-400" />}
+                    </div>
+                    <span className="text-xs font-bold text-neutral-100">{preset.name}</span>
+                    <span className="text-[10px] text-neutral-400 line-clamp-1">{preset.landmark}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
         {/* Studio Parameter Config Bar */}
         <div className="mt-6 pt-5 border-t border-neutral-800 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
-          {/* 1. Model Selector */}
+          {/* Model Selector */}
           <div className="flex flex-col gap-1.5">
             <label className="text-neutral-400 font-medium flex items-center gap-1">
               <span>Veo Model</span>
@@ -312,7 +357,7 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
             </select>
           </div>
 
-          {/* 2. Aspect Ratio Selector (9:16 or 16:9 as instructed) */}
+          {/* Aspect Ratio Selector */}
           <div className="flex flex-col gap-1.5">
             <label className="text-neutral-400 font-medium">Aspect Ratio</label>
             <div className="grid grid-cols-2 gap-2">
@@ -325,7 +370,7 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
                     : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
                 }`}
               >
-                9:16 (Portrait / Reels)
+                9:16 (Vertical Reel)
               </button>
               <button
                 type="button"
@@ -341,7 +386,7 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
             </div>
           </div>
 
-          {/* 3. Resolution */}
+          {/* Resolution */}
           <div className="flex flex-col gap-1.5">
             <label className="text-neutral-400 font-medium">Resolution</label>
             <div className="grid grid-cols-2 gap-2">
@@ -354,7 +399,7 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
                     : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
                 }`}
               >
-                720p HD (Quick)
+                720p HD
               </button>
               <button
                 type="button"
@@ -370,13 +415,13 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
             </div>
           </div>
 
-          {/* 4. Motion Duration */}
+          {/* Master Clip Duration */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-neutral-400 font-medium">Duration & Camera</label>
+            <label className="text-neutral-400 font-medium">Clip Duration</label>
             <div className="py-2 px-3 bg-neutral-950 border border-neutral-800 rounded-xl text-neutral-300 font-mono flex items-center justify-between">
-              <span>15 Seconds</span>
+              <span>6 Seconds Master</span>
               <span className="text-[10px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                Slow Push-In
+                Seamless Loop
               </span>
             </div>
           </div>
@@ -388,15 +433,18 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
             <label className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
               <span>Cinematic Motion Prompt</span>
               <span className="text-[10px] text-amber-400 font-normal">
-                (Specifies physics, vehicle lanes, architecture stability, and elevated camera)
+                (Specifies vehicle physics, architectural rigidity, and lighting)
               </span>
             </label>
             <button
-              onClick={() => setPrompt(DEFAULT_EDINBURGH_PROMPT)}
+              onClick={() => {
+                const current = CITY_PRESETS.find((p) => p.id === activePresetId);
+                setPrompt(current ? current.prompt : CITY_PRESETS[0].prompt);
+              }}
               className="text-[11px] text-neutral-400 hover:text-amber-300 flex items-center gap-1 transition-colors"
             >
               <RotateCcw className="w-3 h-3" />
-              Reset to Edinburgh Master Prompt
+              Reset Scene Prompt
             </button>
           </div>
 
@@ -408,36 +456,43 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
             placeholder="Describe the cinematic motion you want Veo to synthesize..."
           />
 
-          {/* Quick Modifier Pills */}
+          {/* Creative Modifier Chips */}
           <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
-            <span className="text-neutral-500 font-medium">Quick Prompts:</span>
+            <span className="text-neutral-500 font-medium">Prompt Modifiers:</span>
             <button
               type="button"
-              onClick={() => addPromptTag('KEEP ARCHITECTURE 100% RIGID AND ANCHORED. NO MELTING BUILDINGS.')}
+              onClick={() => addPromptTag('KEEP ARCHITECTURE 100% RIGID AND ANCHORED. ZERO MORPHING FACADES.')}
               className="px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-amber-500/40 transition-colors"
             >
-              + Anchor Historic Spires
+              + Anchor Spires
             </button>
             <button
               type="button"
-              onClick={() => addPromptTag('REALISTIC LOTHIAN BUS AND CAR SPEEDS WITH NATURAL BRAKING AND HEADLIGHTS.')}
+              onClick={() => addPromptTag('DOUBLE-DECKER LOTHIAN BUSES AND EDINBURGH BLACK CABS WITH NATURAL BRAKING AND HEADLIGHTS.')}
               className="px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-amber-500/40 transition-colors"
             >
-              + Lothian Bus Physics
+              + Lothian Bus Dynamics
             </button>
             <button
               type="button"
-              onClick={() => addPromptTag('DUSK SUNSET CLOUDS DRIFT SLOWLY TOWARDS THE WEST WITH WARM GOLDEN AMBIANCE.')}
+              onClick={() => addPromptTag('GENTLE SCOTTISH DRIZZLE WITH SHIMMERING WET COBBLESTONES AND AMBER ROAD REFLECTIONS.')}
               className="px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-amber-500/40 transition-colors"
             >
-              + Sunset Cloud Drift
+              + Wet Pavement Shimmer
             </button>
             <button
               type="button"
-              onClick={() => addPromptTag('SUBTLE ELEVATED TELEPHOTO CAMERA PUSH-IN OVER 15 SECONDS WITHOUT ROTATION.')}
+              onClick={() => addPromptTag('VOLUMETRIC COASTAL SEA MIST (THE HAAR) DRIFTING THROUGH HISTORIC GOTHIC ARCHITECTURE.')}
               className="px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-amber-500/40 transition-colors"
             >
-              + Subtle Push-In
+              + Coastal Sea Mist
+            </button>
+            <button
+              type="button"
+              onClick={() => addPromptTag('SUBTLE ELEVATED 35MM TELEPHOTO PERSPECTIVE WITH SLOW 4% PUSH-IN OVER 6 SECONDS.')}
+              className="px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-amber-500/40 transition-colors"
+            >
+              + 35mm Telephoto Push-In
             </button>
           </div>
         </div>
@@ -456,17 +511,16 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
             {isGenerating ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin text-amber-400" />
-                <span>Synthesizing Video with Google Veo 3.1...</span>
+                <span>Synthesizing Living City Video with Google Veo 3.1...</span>
               </>
             ) : (
               <>
                 <Sparkles className="w-5 h-5 fill-current" />
-                <span>Generate 15-Second Cinematic Video</span>
+                <span>Generate Cinematic Living Video</span>
               </>
             )}
           </button>
 
-          {/* Progress / Status Display */}
           {isGenerating && (
             <div className="p-4 rounded-xl bg-neutral-950/80 border border-amber-500/30 flex flex-col gap-3 animate-fade-in">
               <div className="flex items-center justify-between text-xs">
@@ -479,7 +533,6 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
                 </span>
               </div>
 
-              {/* Progress Bar */}
               <div className="w-full bg-neutral-900 h-2 rounded-full overflow-hidden border border-neutral-800">
                 <div
                   className="h-full bg-gradient-to-r from-amber-500 to-amber-300 transition-all duration-700"
@@ -492,13 +545,12 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
               <div className="flex items-start gap-2 text-[11px] text-neutral-400 pt-1">
                 <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                 <span>
-                  Video generation with Veo 3.1 synthesizes full motion physics across 15 seconds. Please keep this tab active while the video renders.
+                  Veo 3.1 synthesizes real vehicle physics, pedestrian walking cadence, and volumetric lighting across the frame. Please keep this tab active while your video renders.
                 </span>
               </div>
             </div>
           )}
 
-          {/* Error Alert */}
           {errorMessage && (
             <div className="p-4 rounded-xl bg-red-950/40 border border-red-500/40 text-red-200 text-xs flex items-start gap-3">
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
@@ -506,7 +558,7 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
                 <p className="font-semibold text-red-300">Generation Note</p>
                 <p className="mt-0.5 text-neutral-300">{errorMessage}</p>
                 <p className="mt-2 text-[11px] text-neutral-400">
-                  You can also preview and interact with the real-time Living City Motion Engine above anytime with zero waiting!
+                  You can explore real-time physics and environmental atmospheres in the Living Motion Engine anytime with zero waiting!
                 </p>
               </div>
             </div>
@@ -514,7 +566,7 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
         </div>
       </div>
 
-      {/* Generated Video Showcase (When Ready) */}
+      {/* Generated Video Showcase */}
       {generatedVideoUrl && (
         <div className="p-6 rounded-2xl bg-neutral-900/90 border border-amber-500/40 backdrop-blur-xl flex flex-col gap-4 shadow-2xl">
           <div className="flex items-center justify-between">
@@ -523,14 +575,14 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
               <span>Generated Veo 3.1 Cinematic Video Ready</span>
             </div>
 
-            <a
-              href={generatedVideoUrl}
-              download="edinburgh_living_city.mp4"
+            <button
+              onClick={handleDownloadMp4}
+              disabled={isDownloading}
               className="px-4 py-2 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs hover:bg-amber-400 transition-colors flex items-center gap-1.5 shadow-lg"
             >
-              <Download className="w-4 h-4" />
-              Download MP4
-            </a>
+              <Download className={`w-4 h-4 ${isDownloading ? 'animate-bounce' : ''}`} />
+              <span>{isDownloading ? 'Saving MP4...' : 'Download MP4'}</span>
+            </button>
           </div>
 
           <div className="relative max-h-[75vh] w-full flex justify-center bg-black rounded-xl overflow-hidden border border-neutral-800">

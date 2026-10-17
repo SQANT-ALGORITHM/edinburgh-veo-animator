@@ -13,20 +13,30 @@ import {
   Sparkles,
   SplitSquareVertical,
   Camera,
+  Sun,
+  Moon,
+  CloudRain,
+  Wind,
+  Bell,
+  Compass,
 } from 'lucide-react';
 import { cityAudio } from '../utils/audio';
-import { MotionLayerSettings } from '../types';
+import { MotionLayerSettings, TimeOfDay, WeatherEffect } from '../types';
 
 interface LivingCanvasProps {
   imageSrc: string;
   isCustomImage?: boolean;
+  timeOfDay?: TimeOfDay;
+  weather?: WeatherEffect;
+  onTimeOfDayChange?: (tod: TimeOfDay) => void;
+  onWeatherChange?: (w: WeatherEffect) => void;
 }
 
 interface Vehicle {
   id: number;
-  lane: 'northbound' | 'southbound'; // southbound = moving down towards camera, northbound = moving up
-  laneOffset: number; // -1 to 1 across lane width
-  progress: number; // 0 (horizon) to 1 (foreground)
+  lane: 'northbound' | 'southbound';
+  laneOffset: number;
+  progress: number;
   speed: number;
   type: 'bus' | 'car' | 'cab';
   color: string;
@@ -36,28 +46,60 @@ interface Vehicle {
 interface Pedestrian {
   id: number;
   side: 'left' | 'right';
-  progress: number; // 0 to 1
+  progress: number;
   direction: 1 | -1;
   speed: number;
   color: string;
   size: number;
 }
 
+interface WeatherParticle {
+  x: number;
+  y: number;
+  speedX: number;
+  speedY: number;
+  size: number;
+  alpha: number;
+  rotation?: number;
+  rotationSpeed?: number;
+}
+
 export const LivingCanvas: React.FC<LivingCanvasProps> = ({
   imageSrc,
   isCustomImage = false,
+  timeOfDay: controlledTimeOfDay,
+  weather: controlledWeather,
+  onTimeOfDayChange,
+  onWeatherChange,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(true);
-  const [currentTime, setCurrentTime] = useState(0); // 0 to 15 seconds
+  const [currentTime, setCurrentTime] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [isMuted, setIsMuted] = useState(true);
   const [volume, setVolume] = useState(0.4);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [compareMode, setCompareMode] = useState<'live' | 'split' | 'static'>('live');
-  const [splitPosition, setSplitPosition] = useState(50); // percentage
+  const [splitPosition, setSplitPosition] = useState(50);
   const [showWireframe, setShowWireframe] = useState(false);
+
+  // Environmental Controls
+  const [localTimeOfDay, setLocalTimeOfDay] = useState<TimeOfDay>('golden_hour');
+  const [localWeather, setLocalWeather] = useState<WeatherEffect>('clear');
+
+  const activeTimeOfDay = controlledTimeOfDay || localTimeOfDay;
+  const activeWeather = controlledWeather || localWeather;
+
+  const setTimeOfDay = (tod: TimeOfDay) => {
+    setLocalTimeOfDay(tod);
+    onTimeOfDayChange?.(tod);
+  };
+
+  const setWeather = (w: WeatherEffect) => {
+    setLocalWeather(w);
+    onWeatherChange?.(w);
+  };
 
   // Motion layers
   const [layers, setLayers] = useState<MotionLayerSettings>({
@@ -67,9 +109,12 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
     streetLights: true,
     cameraPushIn: true,
     clockLuminescence: true,
+    weather: true,
+    vectorOverlay: false,
   });
 
   const [showSettings, setShowSettings] = useState(false);
+  const [clockChimed, setClockChimed] = useState(false);
 
   // Simulation state
   const baseImageRef = useRef<HTMLImageElement | null>(null);
@@ -78,19 +123,18 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
   const lastTimeRef = useRef<number>(performance.now());
   const simulationTimeRef = useRef<number>(0);
 
-  // Vehicles and Pedestrians pool
+  // Vehicles, Pedestrians, Weather pools
   const vehiclesRef = useRef<Vehicle[]>([]);
   const pedestriansRef = useRef<Pedestrian[]>([]);
+  const weatherParticlesRef = useRef<WeatherParticle[]>([]);
 
   // Initialize vehicles for Princes Street
   useEffect(() => {
     const vehicles: Vehicle[] = [
-      // Double decker Lothian buses
       { id: 1, lane: 'southbound', laneOffset: -0.25, progress: 0.88, speed: 0.024, type: 'bus', color: '#881337', lightIntensity: 1.0 },
       { id: 2, lane: 'southbound', laneOffset: 0.28, progress: 0.72, speed: 0.026, type: 'bus', color: '#9f1239', lightIntensity: 0.95 },
       { id: 3, lane: 'southbound', laneOffset: -0.15, progress: 0.52, speed: 0.028, type: 'bus', color: '#881337', lightIntensity: 0.9 },
       { id: 4, lane: 'northbound', laneOffset: 0.35, progress: 0.65, speed: 0.029, type: 'bus', color: '#9f1239', lightIntensity: 0.85 },
-      // Cars & Cabs
       { id: 5, lane: 'southbound', laneOffset: 0.12, progress: 0.94, speed: 0.038, type: 'cab', color: '#111827', lightIntensity: 1.0 },
       { id: 6, lane: 'southbound', laneOffset: -0.32, progress: 0.42, speed: 0.035, type: 'car', color: '#b91c1c', lightIntensity: 0.8 },
       { id: 7, lane: 'northbound', laneOffset: 0.18, progress: 0.35, speed: 0.032, type: 'car', color: '#cbd5e1', lightIntensity: 0.75 },
@@ -114,6 +158,22 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
       });
     }
     pedestriansRef.current = pedestrians;
+
+    // Weather particles
+    const particles: WeatherParticle[] = [];
+    for (let i = 0; i < 90; i++) {
+      particles.push({
+        x: Math.random() * 720,
+        y: Math.random() * 1280,
+        speedX: -1 + Math.random() * 2,
+        speedY: 2 + Math.random() * 8,
+        size: 1 + Math.random() * 3,
+        alpha: 0.2 + Math.random() * 0.6,
+        rotation: Math.random() * Math.PI * 2,
+        rotationSpeed: -0.05 + Math.random() * 0.1,
+      });
+    }
+    weatherParticlesRef.current = particles;
   }, []);
 
   // Load image
@@ -128,7 +188,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
     };
   }, [imageSrc]);
 
-  // Handle Audio toggle
+  // Audio toggle
   const toggleAudio = () => {
     if (isMuted) {
       cityAudio.start();
@@ -146,6 +206,12 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
     cityAudio.setVolume(val);
   };
 
+  const handleTriggerClockChime = () => {
+    cityAudio.chimeClock();
+    setClockChimed(true);
+    setTimeout(() => setClockChimed(false), 2800);
+  };
+
   // Main rendering loop
   const renderFrame = useCallback(() => {
     const canvas = canvasRef.current;
@@ -161,14 +227,13 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
 
     ctx.clearRect(0, 0, w, h);
 
-    const t = simulationTimeRef.current; // seconds
-    const loopDuration = 15.0; // 15-second cinematic loop
+    const t = simulationTimeRef.current;
+    const loopDuration = 15.0;
     const normalizedLoop = (t % loopDuration) / loopDuration;
 
     // 1. Camera Zoom Calculation (Subtle elevated push-in from 1.000 to 1.045)
     let zoom = 1.0;
     if (layers.cameraPushIn && compareMode !== 'static') {
-      // Smooth sinusoidal cinematic push-in
       zoom = 1.0 + 0.045 * Math.sin((normalizedLoop * Math.PI) / 2);
     }
 
@@ -199,31 +264,58 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
       ctx.clip();
     }
 
-    // 3. SKY & CLOUDS DRIFT LAYER (y: 0 to 0.42 * h)
+    // 3. Environmental Atmosphere & Time of Day Tint
+    if (activeTimeOfDay !== 'golden_hour') {
+      ctx.save();
+      if (activeTimeOfDay === 'blue_hour') {
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(30, 58, 138, 0.15)';
+        ctx.fillRect(0, 0, w, h * 0.6);
+      } else if (activeTimeOfDay === 'gothic_night') {
+        ctx.fillStyle = 'rgba(5, 5, 10, 0.42)';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+        ctx.fillRect(0, 0, w, h * 0.7);
+      } else if (activeTimeOfDay === 'misty_dawn') {
+        ctx.fillStyle = 'rgba(238, 242, 255, 0.14)';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(244, 114, 182, 0.08)';
+        ctx.fillRect(0, 0, w, h * 0.45);
+      }
+      ctx.restore();
+    }
+
+    // 4. SKY & CLOUDS DRIFT LAYER (y: 0 to 0.42 * h)
     if (layers.cloudDrift) {
       ctx.save();
-      // Clip to sky region above roofline & spires
       ctx.beginPath();
       ctx.rect(0, 0, w, h * 0.42);
       ctx.clip();
 
-      const cloudDriftOffset1 = ((t * 8) % w);
-      const cloudDriftOffset2 = ((t * 4) % w);
+      const cloudDriftOffset1 = (t * 8) % w;
+      const cloudDriftOffset2 = (t * 4) % w;
 
-      // Warm dusk cloud breathing gradient
       const skyGrad = ctx.createLinearGradient(0, 0, 0, h * 0.4);
       const sunsetPulse = 0.06 * Math.sin(t * 0.4);
-      skyGrad.addColorStop(0, 'rgba(30, 20, 35, 0.08)');
-      skyGrad.addColorStop(0.5, `rgba(249, 115, 22, ${0.07 + sunsetPulse})`);
-      skyGrad.addColorStop(0.85, `rgba(251, 146, 60, ${0.1 + sunsetPulse * 1.2})`);
-      skyGrad.addColorStop(1, 'rgba(217, 119, 6, 0.05)');
+
+      if (activeTimeOfDay === 'blue_hour' || activeTimeOfDay === 'gothic_night') {
+        skyGrad.addColorStop(0, 'rgba(10, 15, 30, 0.15)');
+        skyGrad.addColorStop(0.5, 'rgba(30, 58, 138, 0.18)');
+        skyGrad.addColorStop(1, 'rgba(217, 119, 6, 0.08)');
+      } else {
+        skyGrad.addColorStop(0, 'rgba(30, 20, 35, 0.08)');
+        skyGrad.addColorStop(0.5, `rgba(249, 115, 22, ${0.07 + sunsetPulse})`);
+        skyGrad.addColorStop(0.85, `rgba(251, 146, 60, ${0.1 + sunsetPulse * 1.2})`);
+        skyGrad.addColorStop(1, 'rgba(217, 119, 6, 0.05)');
+      }
 
       ctx.fillStyle = skyGrad;
       ctx.fillRect(0, 0, w, h * 0.42);
 
       // Wispy cloud drift bands
       ctx.globalCompositeOperation = 'screen';
-      ctx.fillStyle = 'rgba(253, 186, 116, 0.035)';
+      ctx.fillStyle = activeTimeOfDay === 'gothic_night' ? 'rgba(147, 197, 253, 0.03)' : 'rgba(253, 186, 116, 0.035)';
       for (let i = 0; i < 4; i++) {
         const cy = h * (0.08 + i * 0.08);
         const cx = ((cloudDriftOffset1 * (1 + i * 0.3) + i * 180) % (w * 1.5)) - w * 0.25;
@@ -231,30 +323,24 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
         ctx.ellipse(cx, cy, 260, 42, 0.05, 0, Math.PI * 2);
         ctx.fill();
       }
-
-      ctx.fillStyle = 'rgba(249, 115, 22, 0.025)';
-      for (let i = 0; i < 3; i++) {
-        const cy = h * (0.12 + i * 0.09);
-        const cx = ((cloudDriftOffset2 * (0.8 + i * 0.4) + i * 220) % (w * 1.5)) - w * 0.25;
-        ctx.beginPath();
-        ctx.ellipse(cx, cy, 320, 55, -0.04, 0, Math.PI * 2);
-        ctx.fill();
-      }
       ctx.restore();
     }
 
-    // 4. BALMORAL HOTEL CLOCK TOWER ILLUMINATION (x: ~0.18*w, y: ~0.37*h)
+    // 5. BALMORAL CLOCK TOWER ILLUMINATION & CHIME PULSE
     if (layers.clockLuminescence) {
       ctx.save();
       const clockX = w * 0.185;
       const clockY = h * 0.265;
       const clockRadius = w * 0.042;
 
-      // Soft warm radiance breathing
-      const glowIntensity = 0.22 + 0.05 * Math.sin(t * 1.2);
+      let glowIntensity = 0.24 + 0.06 * Math.sin(t * 1.2);
+      if (clockChimed) {
+        glowIntensity += 0.4;
+      }
+
       const clockGrad = ctx.createRadialGradient(
         clockX, clockY, clockRadius * 0.2,
-        clockX, clockY, clockRadius * 2.8
+        clockX, clockY, clockRadius * (clockChimed ? 4.5 : 2.8)
       );
       clockGrad.addColorStop(0, `rgba(254, 240, 138, ${glowIntensity})`);
       clockGrad.addColorStop(0.4, `rgba(245, 158, 11, ${glowIntensity * 0.6})`);
@@ -263,49 +349,53 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
       ctx.globalCompositeOperation = 'screen';
       ctx.fillStyle = clockGrad;
       ctx.beginPath();
-      ctx.arc(clockX, clockY, clockRadius * 2.8, 0, Math.PI * 2);
+      ctx.arc(clockX, clockY, clockRadius * (clockChimed ? 4.5 : 2.8), 0, Math.PI * 2);
       ctx.fill();
+
+      // If chime active, draw acoustic chime rings
+      if (clockChimed) {
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(clockX, clockY, clockRadius * 3.2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
       ctx.restore();
     }
 
-    // 5. ROAD PERSPECTIVE COORDINATES & VEHICLES (Princes Street)
-    // Vanishing Point at top of Princes Street
+    // 6. ROAD PERSPECTIVE COORDINATES & VEHICLES (Princes Street)
     const vpX = w * 0.518;
     const vpY = h * 0.515;
-
-    // Road bottom bounds
     const roadLeftBottom = w * 0.24;
     const roadRightBottom = w * 0.78;
     const roadBottomY = h * 1.0;
 
-    // Helper: calculate x coordinate in perspective at progress yProg (0 = horizon, 1 = bottom)
     const getRoadPoint = (yProg: number, lateralOffset: number) => {
-      // lateralOffset: -1 is left curb, 0 is center line, 1 is right curb
       const y = vpY + (roadBottomY - vpY) * Math.pow(yProg, 1.35);
       const roadWidth = (roadRightBottom - roadLeftBottom) * Math.pow(yProg, 1.25) + (w * 0.04);
-      const centerX = vpX + ( (roadLeftBottom + roadRightBottom) / 2 - vpX ) * yProg;
-      const x = centerX + (lateralOffset * (roadWidth / 2));
+      const centerX = vpX + ((roadLeftBottom + roadRightBottom) / 2 - vpX) * yProg;
+      const x = centerX + lateralOffset * (roadWidth / 2);
       return { x, y, roadWidth };
     };
 
-    // 6. STREET LIGHTS & WET REFLECTIONS
+    // 7. STREET LIGHTS & WET REFLECTIONS
     if (layers.streetLights) {
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
 
-      // Moving wet asphalt reflections beneath traffic
       for (const v of vehiclesRef.current) {
         if (v.progress > 0.3) {
           const pt = getRoadPoint(v.progress, v.laneOffset);
           const reflGrad = ctx.createLinearGradient(pt.x, pt.y, pt.x, pt.y + 60 * v.progress);
           const isWhite = v.lane === 'southbound';
           if (isWhite) {
-            reflGrad.addColorStop(0, `rgba(254, 243, 199, ${0.35 * v.progress})`);
-            reflGrad.addColorStop(0.5, `rgba(251, 191, 36, ${0.2 * v.progress})`);
+            reflGrad.addColorStop(0, `rgba(254, 243, 199, ${0.4 * v.progress})`);
+            reflGrad.addColorStop(0.5, `rgba(251, 191, 36, ${0.25 * v.progress})`);
             reflGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
           } else {
-            reflGrad.addColorStop(0, `rgba(239, 68, 68, ${0.4 * v.progress})`);
-            reflGrad.addColorStop(0.6, `rgba(220, 38, 38, ${0.2 * v.progress})`);
+            reflGrad.addColorStop(0, `rgba(239, 68, 68, ${0.45 * v.progress})`);
+            reflGrad.addColorStop(0.6, `rgba(220, 38, 38, ${0.25 * v.progress})`);
             reflGrad.addColorStop(1, 'rgba(185, 28, 28, 0)');
           }
           ctx.fillStyle = reflGrad;
@@ -313,9 +403,9 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
         }
       }
 
-      // Street lamp ambient glow shimmering
+      // Street lamp ambient glow
       const streetLamps = [
-        { x: w * 0.49, y: h * 0.67, color: 'rgba(52, 211, 153, 0.4)' }, // green pedestrian crossing
+        { x: w * 0.49, y: h * 0.67, color: 'rgba(52, 211, 153, 0.4)' },
         { x: w * 0.54, y: h * 0.68, color: 'rgba(52, 211, 153, 0.4)' },
         { x: w * 0.37, y: h * 0.81, color: 'rgba(251, 191, 36, 0.3)' },
         { x: w * 0.72, y: h * 0.83, color: 'rgba(251, 191, 36, 0.3)' },
@@ -323,20 +413,19 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
 
       for (const lamp of streetLamps) {
         const lampFlicker = 0.85 + 0.15 * Math.sin(t * 3.5 + lamp.x);
-        const lampGrad = ctx.createRadialGradient(lamp.x, lamp.y, 2, lamp.x, lamp.y, 24);
-        lampGrad.addColorStop(0, lamp.color.replace('0.4', (0.5 * lampFlicker).toFixed(2)).replace('0.3', (0.4 * lampFlicker).toFixed(2)));
+        const lampGrad = ctx.createRadialGradient(lamp.x, lamp.y, 2, lamp.x, lamp.y, 26);
+        lampGrad.addColorStop(0, lamp.color.replace('0.4', (0.55 * lampFlicker).toFixed(2)).replace('0.3', (0.45 * lampFlicker).toFixed(2)));
         lampGrad.addColorStop(1, 'transparent');
         ctx.fillStyle = lampGrad;
         ctx.beginPath();
-        ctx.arc(lamp.x, lamp.y, 24, 0, Math.PI * 2);
+        ctx.arc(lamp.x, lamp.y, 26, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
     }
 
-    // 7. PRIMARY TRAFFIC MOTION (Buses & Cars moving naturally along Princes Street)
+    // 8. PRIMARY TRAFFIC MOTION (Double Decker Buses & Edinburgh Cabs)
     if (layers.traffic) {
-      // Sort vehicles by progress so vehicles farther away are drawn first
       const sortedVehicles = [...vehiclesRef.current].sort((a, b) => a.progress - b.progress);
 
       for (const v of sortedVehicles) {
@@ -351,56 +440,51 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
         ctx.save();
         ctx.translate(pt.x, pt.y);
 
-        // Vehicle Shadow
-        ctx.fillStyle = 'rgba(5, 5, 8, 0.65)';
-        ctx.beginPath();
-        ctx.ellipse(0, 4 * scale, vWidth * 0.65, 8 * scale, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Vehicle Body
-        ctx.fillStyle = v.color;
-        // Rounded vehicle body
         const rx = -vWidth / 2;
         const ry = -vHeight;
+
+        // Ground shadow
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
         ctx.beginPath();
-        ctx.roundRect(rx, ry, vWidth, vHeight, 4 * scale);
+        ctx.ellipse(0, 0, vWidth * 0.8, 6 * scale, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Vehicle Roof / Cab
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
-        ctx.fillRect(rx + 2 * scale, ry + 2 * scale, vWidth - 4 * scale, vRoofHeight);
+        // Vehicle Lower Chassis
+        ctx.fillStyle = v.color;
+        ctx.beginPath();
+        ctx.roundRect(rx, ry + vRoofHeight, vWidth, vHeight - vRoofHeight, 3 * scale);
+        ctx.fill();
 
-        // Double-decker bus illuminated windows
+        // Upper deck or cabin
+        ctx.fillStyle = isBus ? '#4c0519' : '#0f172a';
+        ctx.beginPath();
+        ctx.roundRect(rx + 2 * scale, ry, vWidth - 4 * scale, vRoofHeight + 2 * scale, 2 * scale);
+        ctx.fill();
+
+        // Illuminated bus destination screen & passenger windows
         if (isBus) {
-          ctx.fillStyle = 'rgba(254, 240, 138, 0.85)';
-          const winH = 8 * scale;
-          // Upper deck windows
-          ctx.fillRect(rx + 4 * scale, ry + 8 * scale, vWidth - 8 * scale, winH);
-          // Lower deck windows
-          ctx.fillRect(rx + 4 * scale, ry + 24 * scale, vWidth - 8 * scale, winH);
-
-          // Route destination display LED
-          ctx.fillStyle = 'rgba(245, 158, 11, 0.95)';
-          ctx.fillRect(rx + 6 * scale, ry + 3 * scale, vWidth - 12 * scale, 3 * scale);
+          ctx.fillStyle = 'rgba(254, 240, 138, 0.75)';
+          ctx.fillRect(rx + 4 * scale, ry + 3 * scale, vWidth - 8 * scale, 5 * scale);
+          ctx.fillStyle = 'rgba(254, 243, 199, 0.5)';
+          ctx.fillRect(rx + 3 * scale, ry + 11 * scale, vWidth - 6 * scale, 8 * scale);
+          ctx.fillRect(rx + 3 * scale, ry + vRoofHeight + 4 * scale, vWidth - 6 * scale, 9 * scale);
         }
 
-        // Headlights or Taillights based on direction
-        const isFacingCamera = v.lane === 'southbound';
+        // Headlights or Taillights
+        if (v.lane === 'southbound') {
+          const lightY = ry + vHeight - 3 * scale;
+          const leftLightX = rx + 3 * scale;
+          const rightLightX = rx + vWidth - 3 * scale;
 
-        if (isFacingCamera) {
-          // Southbound = Heading towards camera -> Brilliant warm headlights
-          const lightY = ry + vHeight - 4 * scale;
-          const leftLightX = rx + 4 * scale;
-          const rightLightX = rx + vWidth - 4 * scale;
-
-          // Headlight bulbs
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = '#fffbeb';
+          ctx.shadowColor = '#fef08a';
+          ctx.shadowBlur = 12 * scale;
           ctx.beginPath();
           ctx.arc(leftLightX, lightY, 3.5 * scale, 0, Math.PI * 2);
           ctx.arc(rightLightX, lightY, 3.5 * scale, 0, Math.PI * 2);
           ctx.fill();
 
-          // Headlight projection cones on pavement
+          // Projection cones on pavement
           ctx.save();
           ctx.globalCompositeOperation = 'screen';
           const beamGrad = ctx.createLinearGradient(0, lightY, 0, lightY + 110 * scale);
@@ -418,7 +502,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
           ctx.fill();
           ctx.restore();
         } else {
-          // Northbound = Moving away towards spires -> Red glowing taillights
           const lightY = ry + vHeight - 4 * scale;
           const leftLightX = rx + 4 * scale;
           const rightLightX = rx + vWidth - 4 * scale;
@@ -431,7 +514,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
           ctx.arc(rightLightX, lightY, 3 * scale, 0, Math.PI * 2);
           ctx.fill();
 
-          // Subtle red tail streak behind
           ctx.save();
           ctx.globalCompositeOperation = 'screen';
           ctx.fillStyle = 'rgba(239, 68, 68, 0.35)';
@@ -444,10 +526,9 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
       }
     }
 
-    // 8. PEDESTRIAN FLOW ALONG BOTH PAVEMENTS
+    // 9. PEDESTRIAN COMMUTER FLOW
     if (layers.pedestrians) {
       for (const p of pedestriansRef.current) {
-        // Left pavement: lateral -0.85 to -0.65; Right pavement: lateral 0.65 to 0.88
         const lateral = p.side === 'left' ? -0.78 + (p.id % 5) * 0.025 : 0.74 + (p.id % 5) * 0.025;
         const pt = getRoadPoint(p.progress, lateral);
         const pScale = Math.max(0.18, Math.pow(p.progress, 1.25)) * p.size;
@@ -458,19 +539,15 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
         ctx.save();
         ctx.translate(pt.x, pt.y);
 
-        // Pedestrian body (silhouette against golden street lamps)
         ctx.fillStyle = p.color;
-        // Torso/Coat
         ctx.beginPath();
         ctx.ellipse(0, -pH * 0.55, pW * 0.5, pH * 0.38, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Head
         ctx.beginPath();
         ctx.arc(0, -pH * 0.9, pW * 0.42, 0, Math.PI * 2);
         ctx.fill();
 
-        // Subtle leg motion stride
         const stride = Math.sin(t * 8 * p.speed * 40 + p.id) * 3 * pScale;
         ctx.strokeStyle = p.color;
         ctx.lineWidth = 1.2 * pScale;
@@ -485,14 +562,58 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
       }
     }
 
-    // 9. WIREFRAME / PERSPECTIVE FLOW DEBUG OVERLAY
+    // 10. SCOTTISH WEATHER PARTICLE SIMULATION
+    if (layers.weather && activeWeather !== 'clear') {
+      ctx.save();
+      if (activeWeather === 'scottish_rain') {
+        ctx.strokeStyle = 'rgba(203, 213, 225, 0.4)';
+        ctx.lineWidth = 1.2;
+        for (const pt of weatherParticlesRef.current) {
+          ctx.beginPath();
+          ctx.moveTo(pt.x, pt.y);
+          ctx.lineTo(pt.x + pt.speedX * 2, pt.y + pt.speedY * 3);
+          ctx.stroke();
+
+          // Droplet bounce on bottom road
+          if (pt.y > h * 0.7 && Math.random() < 0.15) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      } else if (activeWeather === 'sea_mist') {
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = 'rgba(226, 232, 240, 0.04)';
+        for (let i = 0; i < 6; i++) {
+          const mistX = ((t * 12 + i * 160) % (w * 1.4)) - w * 0.2;
+          const mistY = h * (0.35 + (i % 3) * 0.15);
+          ctx.beginPath();
+          ctx.ellipse(mistX, mistY, 200, 60, 0.02, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (activeWeather === 'amber_leaves') {
+        for (const pt of weatherParticlesRef.current) {
+          ctx.save();
+          ctx.translate(pt.x, pt.y);
+          ctx.rotate((pt.rotation || 0) + t * (pt.rotationSpeed || 0.05));
+          ctx.fillStyle = pt.size > 2 ? 'rgba(249, 115, 22, 0.7)' : 'rgba(217, 119, 6, 0.65)';
+          ctx.beginPath();
+          ctx.ellipse(0, 0, pt.size * 2, pt.size * 1.1, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+      ctx.restore();
+    }
+
+    // 11. WIREFRAME / PERSPECTIVE FLOW DEBUG OVERLAY
     if (showWireframe) {
       ctx.save();
       ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)';
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
 
-      // Perspective street guidelines
       for (let lat = -1; lat <= 1; lat += 0.25) {
         ctx.beginPath();
         const start = getRoadPoint(0.05, lat);
@@ -502,7 +623,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
         ctx.stroke();
       }
 
-      // Vanishing point reticle
       ctx.strokeStyle = '#f59e0b';
       ctx.beginPath();
       ctx.arc(vpX, vpY, 8, 0, Math.PI * 2);
@@ -519,7 +639,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
     if (compareMode === 'split') {
       ctx.restore();
 
-      // Draw Split Divider Line
       const splitX = (splitPosition / 100) * w;
       ctx.strokeStyle = '#f59e0b';
       ctx.lineWidth = 2;
@@ -528,7 +647,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
       ctx.lineTo(splitX, h);
       ctx.stroke();
 
-      // Split Handle Badge
       ctx.fillStyle = '#1e293b';
       ctx.strokeStyle = '#f59e0b';
       ctx.lineWidth = 1.5;
@@ -545,7 +663,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
     }
 
     ctx.restore();
-  }, [layers, compareMode, splitPosition, showWireframe]);
+  }, [layers, compareMode, splitPosition, showWireframe, activeTimeOfDay, activeWeather, clockChimed]);
 
   // Animation frame loop
   useEffect(() => {
@@ -561,7 +679,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
         const cur = simulationTimeRef.current % 15.0;
         setCurrentTime(cur);
 
-        // Advance vehicles along Princes Street
+        // Advance vehicles
         for (const v of vehiclesRef.current) {
           if (v.lane === 'southbound') {
             v.progress += v.speed * delta;
@@ -578,7 +696,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
           }
         }
 
-        // Advance pedestrians along sidewalks
+        // Advance pedestrians
         for (const p of pedestriansRef.current) {
           p.progress += p.direction * p.speed * delta;
           if (p.progress > 1.0) {
@@ -588,6 +706,18 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
             p.progress = 0.0;
             p.direction = 1;
           }
+        }
+
+        // Advance weather particles
+        for (const pt of weatherParticlesRef.current) {
+          pt.y += pt.speedY * delta * 50;
+          pt.x += pt.speedX * delta * 40;
+          if (pt.y > 1280) {
+            pt.y = -20;
+            pt.x = Math.random() * 720;
+          }
+          if (pt.x > 740) pt.x = -20;
+          if (pt.x < -20) pt.x = 740;
         }
       }
 
@@ -604,101 +734,39 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
     };
   }, [isPlaying, imageLoaded, playbackSpeed, renderFrame]);
 
-  // Scrubber jump
   const handleSeek = (newSeconds: number) => {
     simulationTimeRef.current = newSeconds;
     setCurrentTime(newSeconds);
     renderFrame();
   };
 
-  // Handle fullscreen toggle with browser & iframe resilience
   const toggleFullscreen = () => {
     const container = containerRef.current;
     const willBeFullscreen = !isFullscreen;
     setIsFullscreen(willBeFullscreen);
 
     if (willBeFullscreen && container) {
-      // Try native element requestFullscreen if available
       const req =
         (container as any).requestFullscreen ||
-        (container as any).webkitRequestFullscreen ||
-        (container as any).mozRequestFullScreen ||
-        (container as any).msRequestFullscreen;
-
+        (container as any).webkitRequestFullscreen;
       if (typeof req === 'function') {
         try {
-          const promise = req.call(container);
-          if (promise && typeof promise.catch === 'function') {
-            promise.catch(() => {
-              // Graceful fallback to CSS in-window fullscreen inside iframe
-            });
-          }
+          req.call(container);
         } catch {
-          // Gracefully continue using CSS in-window fullscreen
+          // ignore
         }
       }
     } else {
-      // Try exitFullscreen if active
-      const exit =
-        (document as any).exitFullscreen ||
-        (document as any).webkitExitFullscreen ||
-        (document as any).mozCancelFullScreen ||
-        (document as any).msExitFullscreen;
-
-      const isDocFull = !!(
-        document.fullscreenElement ||
-        (document as any).webkitFullscreenElement ||
-        (document as any).mozFullScreenElement ||
-        (document as any).msFullscreenElement
-      );
-
-      if (isDocFull && typeof exit === 'function') {
+      const exit = (document as any).exitFullscreen;
+      if (typeof exit === 'function') {
         try {
-          const promise = exit.call(document);
-          if (promise && typeof promise.catch === 'function') {
-            promise.catch(() => {});
-          }
+          exit.call(document);
         } catch {
-          // Ignore
+          // ignore
         }
       }
     }
   };
-
-  // Sync fullscreen state with document events and Escape key
-  useEffect(() => {
-    const handleFsChange = () => {
-      const isDocFull = !!(
-        document.fullscreenElement ||
-        (document as any).webkitFullscreenElement ||
-        (document as any).mozFullScreenElement ||
-        (document as any).msFullscreenElement
-      );
-      if (!isDocFull && isFullscreen) {
-        setIsFullscreen(false);
-      }
-    };
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isFullscreen) {
-        setIsFullscreen(false);
-      }
-    };
-
-    document.addEventListener('fullscreenchange', handleFsChange);
-    document.addEventListener('webkitfullscreenchange', handleFsChange);
-    document.addEventListener('mozfullscreenchange', handleFsChange);
-    document.addEventListener('MSFullscreenChange', handleFsChange);
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.removeEventListener('fullscreenchange', handleFsChange);
-      document.removeEventListener('webkitfullscreenchange', handleFsChange);
-      document.removeEventListener('mozfullscreenchange', handleFsChange);
-      document.removeEventListener('MSFullscreenChange', handleFsChange);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isFullscreen]);
 
   return (
     <div
@@ -707,8 +775,8 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
         isFullscreen ? 'fixed inset-0 z-50 w-screen h-screen rounded-none' : 'w-full'
       }`}
     >
-      {/* Top Header / Mode Bar */}
-      <div className="w-full flex items-center justify-between px-4 py-2.5 bg-neutral-950/80 backdrop-blur-md border-b border-amber-500/10 z-20">
+      {/* Top Header / Environmental Bar */}
+      <div className="w-full flex flex-wrap items-center justify-between px-4 py-2.5 bg-neutral-950/80 backdrop-blur-md border-b border-amber-500/10 z-20 gap-2">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="relative flex h-2.5 w-2.5">
@@ -727,15 +795,91 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
           </span>
         </div>
 
-        {/* View Modes */}
-        <div className="flex items-center gap-2">
+        {/* Atmosphere & Weather Controls */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Time of Day Pills */}
+          <div className="bg-neutral-900/90 border border-neutral-800 rounded-lg p-0.5 flex text-[11px]">
+            <button
+              onClick={() => setTimeOfDay('golden_hour')}
+              className={`px-2 py-0.5 rounded transition-all ${
+                activeTimeOfDay === 'golden_hour' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-neutral-400 hover:text-neutral-200'
+              }`}
+              title="Golden Hour Sunset"
+            >
+              Golden Hour
+            </button>
+            <button
+              onClick={() => setTimeOfDay('blue_hour')}
+              className={`px-2 py-0.5 rounded transition-all ${
+                activeTimeOfDay === 'blue_hour' ? 'bg-blue-500/20 text-blue-300 font-semibold' : 'text-neutral-400 hover:text-neutral-200'
+              }`}
+              title="Blue Hour Twilight"
+            >
+              Blue Hour
+            </button>
+            <button
+              onClick={() => setTimeOfDay('gothic_night')}
+              className={`px-2 py-0.5 rounded transition-all ${
+                activeTimeOfDay === 'gothic_night' ? 'bg-purple-500/20 text-purple-300 font-semibold' : 'text-neutral-400 hover:text-neutral-200'
+              }`}
+              title="Gothic Midnight"
+            >
+              Midnight
+            </button>
+          </div>
+
+          {/* Weather Pills */}
+          <div className="bg-neutral-900/90 border border-neutral-800 rounded-lg p-0.5 flex text-[11px]">
+            <button
+              onClick={() => setWeather('clear')}
+              className={`px-2 py-0.5 rounded transition-all ${
+                activeWeather === 'clear' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-neutral-400 hover:text-neutral-200'
+              }`}
+            >
+              Clear
+            </button>
+            <button
+              onClick={() => setWeather('scottish_rain')}
+              className={`px-2 py-0.5 rounded flex items-center gap-1 transition-all ${
+                activeWeather === 'scottish_rain' ? 'bg-sky-500/20 text-sky-300 font-semibold' : 'text-neutral-400 hover:text-neutral-200'
+              }`}
+              title="Scottish Drizzle & Wet Asphalt"
+            >
+              <CloudRain className="w-3 h-3" />
+              <span>Drizzle</span>
+            </button>
+            <button
+              onClick={() => setWeather('sea_mist')}
+              className={`px-2 py-0.5 rounded flex items-center gap-1 transition-all ${
+                activeWeather === 'sea_mist' ? 'bg-indigo-500/20 text-indigo-300 font-semibold' : 'text-neutral-400 hover:text-neutral-200'
+              }`}
+              title="The Ha'ar Sea Mist"
+            >
+              <Wind className="w-3 h-3" />
+              <span>Mist</span>
+            </button>
+          </div>
+
+          {/* Clock Bell Chime Trigger */}
+          <button
+            onClick={handleTriggerClockChime}
+            className={`p-1.5 rounded-lg border text-xs flex items-center gap-1 transition-all ${
+              clockChimed
+                ? 'bg-amber-500 text-neutral-950 font-bold shadow-lg scale-105'
+                : 'bg-neutral-900/60 border-neutral-800 text-neutral-300 hover:text-amber-300'
+            }`}
+            title="Ring Balmoral Victorian Clock Tower Chime"
+          >
+            <Bell className={`w-3.5 h-3.5 ${clockChimed ? 'animate-bounce' : ''}`} />
+            <span className="hidden sm:inline">Clock Chime</span>
+          </button>
+
+          {/* View Modes */}
           <div className="bg-neutral-900/90 border border-neutral-800 rounded-lg p-0.5 flex text-xs">
             <button
               onClick={() => setCompareMode('live')}
               className={`px-2.5 py-1 rounded-md transition-all ${
-                compareMode === 'live'
-                  ? 'bg-amber-500/20 text-amber-300 font-medium'
-                  : 'text-neutral-400 hover:text-neutral-200'
+                compareMode === 'live' ? 'bg-amber-500/20 text-amber-300 font-medium' : 'text-neutral-400 hover:text-neutral-200'
               }`}
             >
               Living Motion
@@ -743,20 +887,16 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
             <button
               onClick={() => setCompareMode('split')}
               className={`px-2.5 py-1 rounded-md flex items-center gap-1 transition-all ${
-                compareMode === 'split'
-                  ? 'bg-amber-500/20 text-amber-300 font-medium'
-                  : 'text-neutral-400 hover:text-neutral-200'
+                compareMode === 'split' ? 'bg-amber-500/20 text-amber-300 font-medium' : 'text-neutral-400 hover:text-neutral-200'
               }`}
             >
               <SplitSquareVertical className="w-3.5 h-3.5" />
-              Split Slider
+              Split
             </button>
             <button
               onClick={() => setCompareMode('static')}
               className={`px-2.5 py-1 rounded-md transition-all ${
-                compareMode === 'static'
-                  ? 'bg-amber-500/20 text-amber-300 font-medium'
-                  : 'text-neutral-400 hover:text-neutral-200'
+                compareMode === 'static' ? 'bg-amber-500/20 text-amber-300 font-medium' : 'text-neutral-400 hover:text-neutral-200'
               }`}
             >
               Static Photo
@@ -798,7 +938,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
             title={isMuted ? 'Turn on Edinburgh Evening Ambiance' : 'Mute Ambiance'}
           >
             {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5 animate-pulse" />}
-            <span className="hidden sm:inline">Atmosphere</span>
+            <span className="hidden sm:inline">Audio</span>
           </button>
 
           <button
@@ -812,7 +952,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
 
       {/* Main Canvas Viewport */}
       <div className={`relative w-full ${isFullscreen ? 'flex-1 h-full py-1' : 'py-2'} flex items-center justify-center bg-black/90 overflow-hidden`}>
-        {/* Aspect Ratio Container for Vertical 9:16 Video */}
         <div className={`relative ${isFullscreen ? 'h-full max-h-[calc(100vh-140px)]' : 'max-h-[70vh]'} aspect-[9/16] shadow-2xl rounded-lg overflow-hidden border border-neutral-800`}>
           <canvas
             ref={canvasRef}
@@ -822,7 +961,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
             onClick={() => setIsPlaying(!isPlaying)}
           />
 
-          {/* Interactive Split Slider Dragger overlay */}
           {compareMode === 'split' && (
             <input
               type="range"
@@ -834,7 +972,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
             />
           )}
 
-          {/* Watermark/Badges */}
           <div className="absolute top-3 left-3 pointer-events-none flex flex-col gap-1 z-10">
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-md border border-amber-500/30 text-[10px] font-mono text-amber-300">
               <Camera className="w-3 h-3 text-amber-400" />
@@ -848,7 +985,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
             </span>
           </div>
 
-          {/* Play/Pause overlay when paused */}
           {!isPlaying && (
             <div
               onClick={() => setIsPlaying(true)}
@@ -864,7 +1000,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
 
       {/* Layer Settings Drawer (Collapsible) */}
       {showSettings && (
-        <div className="w-full px-5 py-3 bg-neutral-950/95 border-t border-amber-500/20 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 text-xs">
+        <div className="w-full px-5 py-3 bg-neutral-950/95 border-t border-amber-500/20 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 text-xs">
           <label className="flex items-center gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 hover:border-amber-500/40 cursor-pointer">
             <input
               type="checkbox"
@@ -872,7 +1008,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
               onChange={(e) => setLayers({ ...layers, traffic: e.target.checked })}
               className="accent-amber-500 rounded"
             />
-            <span className="text-neutral-300">Princes St Traffic</span>
+            <span className="text-neutral-300">Traffic Lanes</span>
           </label>
 
           <label className="flex items-center gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 hover:border-amber-500/40 cursor-pointer">
@@ -882,7 +1018,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
               onChange={(e) => setLayers({ ...layers, pedestrians: e.target.checked })}
               className="accent-amber-500 rounded"
             />
-            <span className="text-neutral-300">Pavement Walkers</span>
+            <span className="text-neutral-300">Pedestrians</span>
           </label>
 
           <label className="flex items-center gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 hover:border-amber-500/40 cursor-pointer">
@@ -892,7 +1028,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
               onChange={(e) => setLayers({ ...layers, cloudDrift: e.target.checked })}
               className="accent-amber-500 rounded"
             />
-            <span className="text-neutral-300">Dusk Sunset Clouds</span>
+            <span className="text-neutral-300">Sunset Clouds</span>
           </label>
 
           <label className="flex items-center gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 hover:border-amber-500/40 cursor-pointer">
@@ -924,12 +1060,21 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
             />
             <span className="text-neutral-300">Clock Tower Light</span>
           </label>
+
+          <label className="flex items-center gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 hover:border-amber-500/40 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={layers.weather}
+              onChange={(e) => setLayers({ ...layers, weather: e.target.checked })}
+              className="accent-amber-500 rounded"
+            />
+            <span className="text-neutral-300">Weather Dynamics</span>
+          </label>
         </div>
       )}
 
       {/* 15-Second Cinematic Timeline Bar & Controls */}
       <div className="w-full px-4 py-3 bg-neutral-950/90 backdrop-blur-md border-t border-amber-500/15 flex flex-col gap-2 z-20">
-        {/* Scrubber Progress Slider */}
         <div className="flex items-center gap-3">
           <span className="text-xs font-mono text-neutral-400 w-12 text-right">
             {currentTime.toFixed(2)}s
@@ -945,7 +1090,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
               onChange={(e) => handleSeek(parseFloat(e.target.value))}
               className="w-full h-1.5 bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
             />
-            {/* 15s visual marker ticks */}
             <div className="absolute top-3 left-0 w-full flex justify-between pointer-events-none px-0.5 text-[9px] text-neutral-600 font-mono">
               <span>0s</span>
               <span>3s</span>
@@ -959,7 +1103,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
           <span className="text-xs font-mono text-neutral-500 w-12">15.00s</span>
         </div>
 
-        {/* Bottom Playback Action Bar */}
         <div className="flex items-center justify-between pt-1">
           <div className="flex items-center gap-2">
             <button
@@ -978,7 +1121,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
               <RotateCcw className="w-4 h-4" />
             </button>
 
-            {/* Playback speed toggle */}
             <div className="flex items-center bg-neutral-900 border border-neutral-800 rounded-lg p-0.5 text-xs text-neutral-400">
               {[0.5, 1.0, 1.5, 2.0].map((spd) => (
                 <button
@@ -996,7 +1138,6 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
             </div>
           </div>
 
-          {/* Volume slider when audio is enabled */}
           {!isMuted && (
             <div className="flex items-center gap-2 text-xs text-neutral-400">
               <Volume2 className="w-3.5 h-3.5 text-amber-400" />

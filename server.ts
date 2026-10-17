@@ -8,6 +8,9 @@ import { fileURLToPath } from 'url';
 
 dotenv.config();
 
+// Per environment constraints: HMR is disabled in AI Studio dev environment
+process.env.DISABLE_HMR = 'true';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -290,6 +293,11 @@ app.get('/api/video-stream', async (req: Request, res: Response) => {
     }
 
     const operationName = req.query.operationName as string;
+    const isDownload = req.query.download === '1' || req.query.download === 'true';
+    const disposition = isDownload
+      ? 'attachment; filename="edinburgh_living_city.mp4"'
+      : 'inline; filename="edinburgh_living_city.mp4"';
+
     if (!operationName) {
       return res.status(400).json({
         error: 'operationName is required query param.',
@@ -301,7 +309,7 @@ app.get('/api/video-stream', async (req: Request, res: Response) => {
     if (videoCache.has(operationName)) {
       const cached = videoCache.get(operationName)!;
       res.setHeader('Content-Type', cached.mimeType || 'video/mp4');
-      res.setHeader('Content-Disposition', 'inline; filename="edinburgh_veo.mp4"');
+      res.setHeader('Content-Disposition', disposition);
       res.setHeader('Content-Length', cached.buffer.length.toString());
       return res.send(cached.buffer);
     }
@@ -363,7 +371,7 @@ app.get('/api/video-stream', async (req: Request, res: Response) => {
       });
 
       res.setHeader('Content-Type', 'video/mp4');
-      res.setHeader('Content-Disposition', 'inline; filename="edinburgh_veo.mp4"');
+      res.setHeader('Content-Disposition', disposition);
       res.setHeader('Content-Length', buffer.length.toString());
       return res.send(buffer);
     } catch (apiError: any) {
@@ -410,11 +418,10 @@ async function startServer() {
 
   if (!isProduction) {
     const { createServer } = await import('vite');
-    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createServer({
       server: {
         middlewareMode: true,
-        hmr: isHmrDisabled ? false : { server },
+        ws: { server },
       },
       appType: 'spa',
     });

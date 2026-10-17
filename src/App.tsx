@@ -5,7 +5,8 @@ import { LivingCanvas } from './components/LivingCanvas';
 import { VeoStudio } from './components/VeoStudio';
 import { PromptGuide } from './components/PromptGuide';
 import { HistoryGallery } from './components/HistoryGallery';
-import { VideoHistoryItem } from './types';
+import { VideoHistoryItem, TimeOfDay, WeatherEffect, CityPreset } from './types';
+import { CITY_PRESETS } from './data/presets';
 import {
   auth,
   loginWithGoogle,
@@ -25,13 +26,19 @@ import {
   Eye,
   Sliders,
   Database,
-  CloudCheck,
+  Check,
+  Sun,
+  CloudRain,
+  MapPin,
 } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'motion' | 'veo' | 'guide'>('motion');
   const [currentImageSrc, setCurrentImageSrc] = useState<string>('/edinburgh-golden-rush.jpg');
   const [isCustomImage, setIsCustomImage] = useState<boolean>(false);
+  const [selectedPresetId, setSelectedPresetId] = useState<string>(CITY_PRESETS[0].id);
+  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('golden_hour');
+  const [weather, setWeather] = useState<WeatherEffect>('clear');
   const [history, setHistory] = useState<VideoHistoryItem[]>([]);
   const [user, setUser] = useState<User | null>(null);
 
@@ -49,7 +56,6 @@ export default function App() {
       if (firestoreVideos && firestoreVideos.length > 0) {
         setHistory((prev) => {
           const map = new Map<string, VideoHistoryItem>();
-          // Combine firestore videos with local videos
           firestoreVideos.forEach((v) => map.set(v.id, v));
           prev.forEach((v) => {
             if (!map.has(v.id)) map.set(v.id, v);
@@ -59,7 +65,6 @@ export default function App() {
       }
     });
 
-    // Fallback to local storage
     try {
       const saved = localStorage.getItem('edinburgh_veo_history');
       if (saved) {
@@ -81,7 +86,6 @@ export default function App() {
       // ignore
     }
 
-    // Persist to Firestore if signed in
     if (user) {
       try {
         await saveVideoToFirestore(item, user);
@@ -116,6 +120,16 @@ export default function App() {
     setActiveTab('veo');
   };
 
+  const handleSelectPreset = (preset: CityPreset) => {
+    setSelectedPresetId(preset.id);
+    setCurrentImageSrc(preset.imageSrc);
+    setIsCustomImage(false);
+    setTimeOfDay(preset.timeOfDay);
+    setWeather(preset.weather);
+  };
+
+  const activePreset = CITY_PRESETS.find((p) => p.id === selectedPresetId) || CITY_PRESETS[0];
+
   return (
     <div className="min-h-screen bg-[#090b10] text-[#e2e8f0] flex flex-col font-sans selection:bg-amber-500/30 selection:text-amber-200">
       {/* Top Navbar */}
@@ -136,13 +150,13 @@ export default function App() {
             <div className="max-w-3xl">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-xs font-semibold text-amber-300 mb-3">
                 <Sparkles className="w-3.5 h-3.5 fill-current" />
-                <span>Cinematic 15-Second Motion Masterpiece</span>
+                <span>Living City Video Generator • Powered by Google Veo 3.1</span>
               </div>
               <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold font-cinzel text-neutral-100 tracking-tight leading-tight">
-                Edinburgh Golden Rush Hour
+                Edinburgh Veo Animator
               </h1>
               <p className="mt-2 text-sm sm:text-base text-neutral-300 leading-relaxed max-w-2xl">
-                The world itself is moving. Experience Princes Street animated into a living 15-second cinematic vertical sequence—preserving the Balmoral clock tower, Gothic spires, and dramatic sunset while double-decker buses, cars, and pedestrians navigate the evening rush.
+                The world itself is moving. Create cinematic living-city scenes with AI-powered video generation and environmental motion tools. Built for creative experimentation with vertical video, detailed illustrated worlds, and motion-rich visual storytelling.
               </p>
             </div>
 
@@ -173,11 +187,36 @@ export default function App() {
               >
                 <div className="flex items-center gap-2">
                   <Film className="w-4 h-4 text-amber-400" />
-                  <span>Veo 3.1 Video Generator</span>
+                  <span>Veo 3.1 Video Studio</span>
                 </div>
                 <ArrowRight className="w-3.5 h-3.5 opacity-60" />
               </button>
             </div>
+          </div>
+
+          {/* Quick Landmark World Pills */}
+          <div className="mt-6 pt-5 border-t border-neutral-800/80 flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-neutral-400 font-medium flex items-center gap-1.5 mr-1">
+              <MapPin className="w-3.5 h-3.5 text-amber-400" />
+              <span>Living Worlds:</span>
+            </span>
+            {CITY_PRESETS.map((p) => {
+              const isSelected = selectedPresetId === p.id && !isCustomImage;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => handleSelectPreset(p)}
+                  className={`px-3 py-1.5 rounded-xl border text-xs transition-all flex items-center gap-1.5 ${
+                    isSelected
+                      ? 'bg-amber-500/25 border-amber-500/60 text-amber-200 font-bold shadow-md'
+                      : 'bg-neutral-900/80 border-neutral-800 text-neutral-300 hover:border-amber-500/30 hover:text-neutral-100'
+                  }`}
+                >
+                  {isSelected && <Check className="w-3 h-3 text-amber-400" />}
+                  <span>{p.name}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </section>
@@ -191,6 +230,10 @@ export default function App() {
               <LivingCanvas
                 imageSrc={currentImageSrc}
                 isCustomImage={isCustomImage}
+                timeOfDay={timeOfDay}
+                weather={weather}
+                onTimeOfDayChange={setTimeOfDay}
+                onWeatherChange={setWeather}
               />
             </div>
 
@@ -202,7 +245,7 @@ export default function App() {
                   <span>Rigid Architecture Anchor</span>
                 </div>
                 <p className="text-xs text-neutral-400 leading-relaxed">
-                  The iconic Balmoral Victorian clock tower, illuminated glowing clock face, and Scott Monument Gothic spires remain 100% structurally solid with zero melting or warping.
+                  The iconic Balmoral Victorian clock tower, illuminated glowing clock face, and Scott Monument Gothic spires remain 100% structurally solid with zero melting or morphing.
                 </p>
               </div>
 
@@ -219,7 +262,7 @@ export default function App() {
               <div className="p-5 rounded-2xl bg-neutral-900/50 border border-neutral-800/80 flex flex-col gap-2">
                 <div className="flex items-center gap-2 text-amber-300 font-semibold text-sm">
                   <Clock className="w-4 h-4 text-orange-400" />
-                  <span>Elevated Push-In (15.0s)</span>
+                  <span>Cinematic Push-In & Looping</span>
                 </div>
                 <p className="text-xs text-neutral-400 leading-relaxed">
                   Elevated vantage point with an imperceptible 4.5% cinematic push-in. Finishes seamlessly with the Scottish capital continuing to live and breathe.
@@ -245,6 +288,12 @@ export default function App() {
                 Launch Veo 3.1 Studio
               </button>
             </div>
+
+            {/* Generation History */}
+            <HistoryGallery
+              history={history}
+              onSelectVideo={handleSelectHistoryVideo}
+            />
           </div>
         )}
 
@@ -259,7 +308,6 @@ export default function App() {
               onVideoGenerated={handleVideoGenerated}
             />
 
-            {/* Gallery of saved generations */}
             <HistoryGallery
               history={history}
               onSelectVideo={handleSelectHistoryVideo}
@@ -280,7 +328,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <span className="font-cinzel text-neutral-300 font-bold">EDINBURGH</span>
             <span>•</span>
-            <span>Princes Street Golden Rush Hour Motion</span>
+            <span>Living City Video Generator</span>
             <span>•</span>
             <span>Powered by Google Veo 3.1</span>
           </div>
@@ -288,7 +336,7 @@ export default function App() {
           <div className="flex items-center gap-4 text-neutral-400">
             <span>Aspect Ratio: 9:16 & 16:9</span>
             <span>•</span>
-            <span>15-Second Loopable Sequence</span>
+            <span>Continuous Motion Loop</span>
           </div>
         </div>
       </footer>

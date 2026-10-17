@@ -133,6 +133,27 @@ class CitySoundscape {
     }, 900);
   }
 
+  public chimeClock() {
+    this.initContext();
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const bellGain = this.ctx.createGain();
+    bellGain.gain.setValueAtTime(0.3 * this.volume, now);
+    bellGain.gain.exponentialRampToValueAtTime(0.0001, now + 3.2);
+    bellGain.connect(this.ctx.destination);
+
+    // Fundamental and chime overtones
+    [432, 864, 1296].forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      osc.type = idx === 0 ? 'sine' : 'triangle';
+      osc.frequency.setValueAtTime(freq, now);
+      osc.connect(bellGain);
+      osc.start(now);
+      osc.stop(now + 3.2);
+    });
+  }
+
   public setVolume(val: number) {
     this.volume = Math.max(0, Math.min(1, val));
     if (this.masterGain && this.ctx && this.isPlaying) {
