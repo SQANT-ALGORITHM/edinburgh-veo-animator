@@ -19,9 +19,12 @@ import {
   Wind,
   Bell,
   Compass,
+  Download,
+  Loader2,
+  Film,
 } from 'lucide-react';
 import { cityAudio } from '../utils/audio';
-import { MotionLayerSettings, TimeOfDay, WeatherEffect } from '../types';
+import { MotionLayerSettings, TimeOfDay, WeatherEffect, VideoHistoryItem } from '../types';
 
 interface LivingCanvasProps {
   imageSrc: string;
@@ -30,6 +33,7 @@ interface LivingCanvasProps {
   weather?: WeatherEffect;
   onTimeOfDayChange?: (tod: TimeOfDay) => void;
   onWeatherChange?: (w: WeatherEffect) => void;
+  onVideoRecorded?: (item: VideoHistoryItem) => void;
 }
 
 interface Vehicle {
@@ -71,6 +75,7 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
   weather: controlledWeather,
   onTimeOfDayChange,
   onWeatherChange,
+  onVideoRecorded,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -210,6 +215,86 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
     cityAudio.chimeClock();
     setClockChimed(true);
     setTimeout(() => setClockChimed(false), 2800);
+  };
+
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordProgress, setRecordProgress] = useState(0);
+
+  const handleRecordVideo = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas || isRecording) return;
+
+    if (typeof (canvas as any).captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+      return;
+    }
+
+    try {
+      setIsRecording(true);
+      setRecordProgress(0);
+      setIsPlaying(true);
+
+      const stream = (canvas as any).captureStream(30);
+      let mimeType = 'video/webm;codecs=vp9';
+      if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')) {
+        mimeType = 'video/mp4;codecs=avc1';
+      } else if (MediaRecorder.isTypeSupported('video/webm')) {
+        mimeType = 'video/webm';
+      }
+
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks: Blob[] = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+
+      const recordDuration = 6000;
+      const startTime = Date.now();
+
+      const progressInterval = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const pct = Math.min(100, Math.round((elapsed / recordDuration) * 100));
+        setRecordProgress(pct);
+      }, 100);
+
+      recorder.onstop = () => {
+        clearInterval(progressInterval);
+        setIsRecording(false);
+        const finalBlob = new Blob(chunks, { type: mimeType });
+        const videoUrl = URL.createObjectURL(finalBlob);
+
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = videoUrl;
+        a.download = `edinburgh_living_city_${Date.now()}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        onVideoRecorded?.({
+          id: Date.now().toString(),
+          videoUrl,
+          thumbnailUrl: imageSrc,
+          prompt: `Living City Motion Capture • ${activeTimeOfDay.replace('_', ' ')} • ${activeWeather.replace('_', ' ')}`,
+          aspectRatio: '9:16',
+          model: 'Canvas Motion Engine',
+          createdAt: Date.now(),
+          durationSeconds: 6,
+        });
+      };
+
+      recorder.start();
+      setTimeout(() => {
+        if (recorder.state !== 'inactive') {
+          recorder.stop();
+        }
+      }, recordDuration);
+    } catch (err) {
+      console.error('Recording error:', err);
+      setIsRecording(false);
+    }
   };
 
   // Main rendering loop
@@ -939,6 +1024,29 @@ export const LivingCanvas: React.FC<LivingCanvasProps> = ({
           >
             {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5 animate-pulse" />}
             <span className="hidden sm:inline">Audio</span>
+          </button>
+
+          <button
+            onClick={handleRecordVideo}
+            disabled={isRecording}
+            className={`p-1.5 px-2.5 rounded-lg border text-xs flex items-center gap-1.5 transition-all font-semibold ${
+              isRecording
+                ? 'bg-amber-500 text-neutral-950 font-bold shadow-lg animate-pulse'
+                : 'bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30'
+            }`}
+            title="Record 6-second living city video directly from canvas"
+          >
+            {isRecording ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-950" />
+                <span>Capturing {recordProgress}%</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Export Video</span>
+              </>
+            )}
           </button>
 
           <button

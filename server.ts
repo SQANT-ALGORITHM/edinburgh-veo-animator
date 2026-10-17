@@ -45,7 +45,23 @@ const ai = apiKey
 // ============================================================
 function mapGoogleErrorToHttpStatus(error: any): { status: number; message: string; code: string } {
   const code = error?.code || error?.status || 'UNKNOWN';
-  const message = error?.message || 'An unknown error occurred';
+  const rawMsg = error?.message || '';
+
+  const isQuota =
+    code === 'RESOURCE_EXHAUSTED' ||
+    code === 429 ||
+    rawMsg.includes('RESOURCE_EXHAUSTED') ||
+    rawMsg.includes('exceeded your current quota') ||
+    rawMsg.includes('quota') ||
+    rawMsg.includes('429');
+
+  if (isQuota) {
+    return {
+      status: 429,
+      message: 'Gemini Veo 3.1 quota limit reached. Video generation with Veo models requires an upgraded Gemini API billing plan. You can also explore real-time city physics in the Living Motion Engine anytime with zero waiting.',
+      code: 'RESOURCE_EXHAUSTED',
+    };
+  }
 
   // Extract upstream error details without exposing credentials
   if (code === 'INVALID_ARGUMENT' || code === 400) {
@@ -69,13 +85,6 @@ function mapGoogleErrorToHttpStatus(error: any): { status: number; message: stri
       code: 'PERMISSION_DENIED',
     };
   }
-  if (code === 'RESOURCE_EXHAUSTED' || code === 429) {
-    return {
-      status: 429,
-      message: 'API quota exhausted. Please try again later.',
-      code: 'RESOURCE_EXHAUSTED',
-    };
-  }
   if (code === 'DEADLINE_EXCEEDED' || code === 504) {
     return {
       status: 504,
@@ -97,10 +106,10 @@ function mapGoogleErrorToHttpStatus(error: any): { status: number; message: stri
 app.get('/api/config', (_req: Request, res: Response) => {
   res.json({
     hasApiKey: !!process.env.GEMINI_API_KEY,
-    defaultModel: 'veo-3.1-fast-generate-preview',
+    defaultModel: 'veo-3.1-lite-generate-preview',
     supportedModels: [
-      { id: 'veo-3.1-fast-generate-preview', name: 'Veo 3.1 Fast (Recommended)', tag: 'Fast', supportedDuration: '6 seconds' },
-      { id: 'veo-3.1-lite-generate-preview', name: 'Veo 3.1 Lite', tag: 'Standard', supportedDuration: '6 seconds' },
+      { id: 'veo-3.1-lite-generate-preview', name: 'Veo 3.1 Lite (Recommended)', tag: 'Balanced', supportedDuration: '6 seconds' },
+      { id: 'veo-3.1-fast-generate-preview', name: 'Veo 3.1 Fast', tag: 'Fast', supportedDuration: '6 seconds' },
       { id: 'veo-3.1-generate-preview', name: 'Veo 3.1 Cinematic Quality', tag: 'High-Res', supportedDuration: '6 seconds' },
     ],
     supportedAspectRatios: ['9:16', '16:9'],
@@ -195,17 +204,20 @@ app.post('/api/generate-video', async (req: Request, res: Response) => {
     } catch (apiError: any) {
       const { status, message, code } = mapGoogleErrorToHttpStatus(apiError);
       
-      // Log full error server-side for debugging (never expose to client beyond mapped message)
-      console.error(`[Veo API Error] ${code}:`, {
-        originalMessage: apiError?.message,
-        details: apiError?.details,
-        timestamp: new Date().toISOString(),
-      });
+      if (code === 'RESOURCE_EXHAUSTED' || status === 429) {
+        console.warn(`[Veo API Quota Exceeded 429]: Project quota reached. Prompting user to check billing or use interactive Living Engine.`);
+      } else {
+        console.error(`[Veo API Error] ${code}:`, {
+          originalMessage: apiError?.message,
+          details: apiError?.details,
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       return res.status(status).json({
         error: message,
         code,
-        // Do NOT include upstream API key, full error object, or internal details
+        isQuotaExceeded: code === 'RESOURCE_EXHAUSTED' || status === 429,
       });
     }
   } catch (error: any) {

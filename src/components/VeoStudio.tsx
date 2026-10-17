@@ -33,7 +33,7 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
   onSelectImage,
   onVideoGenerated,
 }) => {
-  const [model, setModel] = useState<VeoModel>('veo-3.1-fast-generate-preview');
+  const [model, setModel] = useState<VeoModel>('veo-3.1-lite-generate-preview');
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16');
   const [resolution, setResolution] = useState<VideoResolution>('720p');
   const [prompt, setPrompt] = useState<string>(CITY_PRESETS[0].prompt);
@@ -44,6 +44,7 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
   const [generationStage, setGenerationStage] = useState<number>(0);
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isQuotaError, setIsQuotaError] = useState(false);
   const [operationName, setOperationName] = useState<string | null>(null);
   const [generatedVideoUrl, setGeneratedVideoUrl] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -156,7 +157,10 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
 
       if (!response.ok || data.error) {
         clearTimers();
-        throw new Error(data.error || 'Failed to start video generation.');
+        setIsGenerating(false);
+        setIsQuotaError(data.code === 'RESOURCE_EXHAUSTED' || !!data.isQuotaExceeded);
+        setErrorMessage(data.error || 'Failed to start video generation.');
+        return;
       }
 
       setOperationName(data.operationName);
@@ -183,7 +187,8 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
           if (pollData.error) {
             clearTimers();
             setIsGenerating(false);
-            setErrorMessage(pollData.error.message || 'Error occurred during Veo generation.');
+            setIsQuotaError(pollData.code === 'RESOURCE_EXHAUSTED' || !!pollData.isQuotaExceeded);
+            setErrorMessage(pollData.error.message || pollData.error || 'Error occurred during Veo generation.');
             return;
           }
 
@@ -552,14 +557,44 @@ export const VeoStudio: React.FC<VeoStudioProps> = ({
           )}
 
           {errorMessage && (
-            <div className="p-4 rounded-xl bg-red-950/40 border border-red-500/40 text-red-200 text-xs flex items-start gap-3">
-              <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <p className="font-semibold text-red-300">Generation Note</p>
-                <p className="mt-0.5 text-neutral-300">{errorMessage}</p>
-                <p className="mt-2 text-[11px] text-neutral-400">
-                  You can explore real-time physics and environmental atmospheres in the Living Motion Engine anytime with zero waiting!
+            <div
+              className={`p-4 rounded-xl text-xs flex items-start gap-3 border transition-all ${
+                isQuotaError
+                  ? 'bg-amber-950/25 border-amber-500/50 text-amber-100 shadow-xl'
+                  : 'bg-red-950/40 border-red-500/40 text-red-200'
+              }`}
+            >
+              <AlertCircle
+                className={`w-4 h-4 shrink-0 mt-0.5 ${
+                  isQuotaError ? 'text-amber-400' : 'text-red-400'
+                }`}
+              />
+              <div className="flex-1 flex flex-col gap-1.5">
+                <p className={`font-semibold ${isQuotaError ? 'text-amber-300' : 'text-red-300'}`}>
+                  {isQuotaError ? 'Google Veo 3.1 API Quota Exceeded (429)' : 'Generation Notice'}
                 </p>
+                <p className="text-neutral-300 leading-relaxed">{errorMessage}</p>
+
+                {isQuotaError ? (
+                  <div className="mt-2 pt-2 border-t border-amber-500/20 flex flex-wrap items-center gap-3 text-[11px]">
+                    <span className="text-neutral-400">
+                      Veo video generation requires paid API tier quota.
+                    </span>
+                    <a
+                      href="https://ai.google.dev/gemini-api/docs/rate-limits"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-amber-300 hover:text-amber-200 underline font-medium"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      View Gemini API Quotas & Billing
+                    </a>
+                  </div>
+                ) : (
+                  <p className="mt-1 text-[11px] text-neutral-400">
+                    You can explore real-time physics and environmental atmospheres in the Living Motion Engine anytime with zero waiting!
+                  </p>
+                )}
               </div>
             </div>
           )}

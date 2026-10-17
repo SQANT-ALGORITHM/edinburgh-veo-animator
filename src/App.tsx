@@ -234,6 +234,7 @@ export default function App() {
                 weather={weather}
                 onTimeOfDayChange={setTimeOfDay}
                 onWeatherChange={setWeather}
+                onVideoRecorded={handleVideoGenerated}
               />
             </div>
 
