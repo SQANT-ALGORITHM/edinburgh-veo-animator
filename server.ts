@@ -241,7 +241,7 @@ app.post('/api/video-status', async (req: Request, res: Response) => {
       const updated = await ai.operations.getVideosOperation({ operation: op });
 
       const hasVideo = !!updated.response?.generatedVideos?.[0]?.video?.uri;
-      const duration = updated.response?.generatedVideos?.[0]?.generatedMetadata?.generatedDurationSeconds || 6;
+      const duration = (updated.response?.generatedVideos?.[0] as any)?.generatedMetadata?.generatedDurationSeconds || 6;
 
       return res.json({
         done: !!updated.done,
